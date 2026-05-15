@@ -21,3 +21,18 @@ body {
     font-weight: 700;
     letter-spacing: 0.02em;
 }
+
+/* Election balance sheet table */
+.election-table td,
+.election-table th {
+    vertical-align: middle;
+    font-size: 13px;
+    padding: 7px 12px;
+}
+.election-table thead th {
+    font-weight: 700;
+    border-bottom: 2px solid #adb5bd;
+}
+.election-table .text-end {
+    font-variant-numeric: tabular-nums;
+}

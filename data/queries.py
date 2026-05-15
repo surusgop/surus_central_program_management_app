@@ -174,61 +174,99 @@ def get_district_list() -> list[dict]:
 # Each function accepts a district_id and returns a DataFrame for one chart.
 # Replace catalog/schema/table references with your actual names.
 
-def get_district_kpis(district_id: str) -> dict:
+def get_district_demographics(district_id: str) -> dict:
     """
-    Scalar KPIs for the selected district.
+    Voter-file demographics for the selected district (not program-filtered).
     Returns a dict of {metric_name: value}.
+    Replace with your actual voter file / targeting table.
     """
     sql_str = f"""
         SELECT
-            SUM(population)                                                  AS total_population,
-            MEDIAN(household_income)                                         AS median_income,
-            ROUND(100.0 * SUM(votes_cast) / NULLIF(SUM(eligible_voters),0), 1) AS voter_turnout_pct,
-            SUM(registered_voters)                                           AS registered_voters
+            SUM(registered_voters)        AS registered_voters,
+            SUM(unreliable_conservatives) AS unreliable_conservatives
         FROM   your_catalog.your_schema.district_demographics
         WHERE  district_id = '{district_id}'
     """
     df = _cached(
-        key=f"kpis:{district_id}",
+        key=f"demographics:{district_id}",
         fn=functools.partial(run_query, sql_str),
-        ttl=_CACHE_TTL,
     )
     return df.iloc[0].to_dict() if not df.empty else {}
 
 
-def get_district_trend(district_id: str) -> pd.DataFrame:
+def get_program_totals(district_id: str, program: str) -> dict:
     """
-    Time-series data for the selected district.
-    Returns columns [period, metric_value].
-    Replace with your actual trend table and date column.
+    Aggregate contacts and events for the selected district, optionally
+    filtered to one program (BP or CLP).  Pass program='both' for combined.
+    Returns a dict with keys total_contacts, total_events.
+    """
+    prog_filter = f"AND program = '{program}'" if program != "both" else ""
+    sql_str = f"""
+        SELECT
+            SUM(contacts) AS total_contacts,
+            SUM(events)   AS total_events
+        FROM   your_catalog.your_schema.outreach_activity
+        WHERE  district_id = '{district_id}'
+        {prog_filter}
+    """
+    df = _cached(
+        key=f"program_totals:{district_id}:{program}",
+        fn=functools.partial(run_query, sql_str),
+    )
+    return df.iloc[0].to_dict() if not df.empty else {}
+
+
+def get_program_comparison(district_id: str) -> pd.DataFrame:
+    """
+    Contacts and events broken down by program (BP, CLP) for the comparison
+    bar chart.  Always returns both programs so the chart can group them;
+    filtering to one program is handled in the page callback.
+    Returns columns [program, contacts, events].
     """
     sql_str = f"""
-        SELECT period, metric_value
-        FROM   your_catalog.your_schema.district_trends
+        SELECT
+            program,
+            SUM(contacts) AS contacts,
+            SUM(events)   AS events
+        FROM   your_catalog.your_schema.outreach_activity
         WHERE  district_id = '{district_id}'
-        ORDER  BY period
+          AND  program IN ('BP', 'CLP')
+        GROUP  BY program
+        ORDER  BY program
     """
     return _cached(
-        key=f"trend:{district_id}",
+        key=f"program_comparison:{district_id}",
         fn=functools.partial(run_query, sql_str),
     )
 
 
-def get_district_breakdown(district_id: str) -> pd.DataFrame:
+def get_district_trend(district_id: str, program: str = "both") -> pd.DataFrame:
     """
-    Category breakdown for the selected district (drives the bar chart).
-    Returns columns [category, value].
+    Time-series outreach data for the selected district and program.
+    When program='both', returns columns [period, program, metric_value]
+    so the trend chart can draw one line per program.
+    When a single program is selected, returns [period, metric_value].
     """
-    sql_str = f"""
-        SELECT category, SUM(value) AS value
-        FROM   your_catalog.your_schema.district_breakdown
-        WHERE  district_id = '{district_id}'
-        GROUP  BY category
-        ORDER  BY value DESC
-        LIMIT  15
-    """
+    if program == "both":
+        sql_str = f"""
+            SELECT period, program, SUM(contacts + events) AS metric_value
+            FROM   your_catalog.your_schema.outreach_activity
+            WHERE  district_id = '{district_id}'
+              AND  program IN ('BP', 'CLP')
+            GROUP  BY period, program
+            ORDER  BY period, program
+        """
+    else:
+        sql_str = f"""
+            SELECT period, SUM(contacts + events) AS metric_value
+            FROM   your_catalog.your_schema.outreach_activity
+            WHERE  district_id = '{district_id}'
+              AND  program = '{program}'
+            GROUP  BY period
+            ORDER  BY period
+        """
     return _cached(
-        key=f"breakdown:{district_id}",
+        key=f"trend:{district_id}:{program}",
         fn=functools.partial(run_query, sql_str),
     )
 

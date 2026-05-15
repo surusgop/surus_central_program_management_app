@@ -1,32 +1,26 @@
 """
-Analytics page — multiple charts driven by a single district slicer.
+Analytics page — KPIs, program comparison, and trend driven by two slicers:
+  - District dropdown   → filters all data to one district
+  - Program selector    → BP, CLP, or Both (affects contacts/events KPIs and charts)
 
-Pattern:
-  One callback receives the district dropdown value as its single Input
-  and returns figures/data for every chart on the page as Outputs.
-  Selecting a district rerenders all charts simultaneously.
-
-Adding more charts:
-  1. Add an Output to the callback decorator.
-  2. Return an additional figure/value at the end of the return tuple.
-  3. Add the corresponding dcc.Graph (or other component) to the layout.
-  That's it — no extra wiring needed.
+The master callback receives both slicers as Inputs and returns all chart
+Outputs simultaneously, so every visual updates in one round-trip.
 """
 
 from __future__ import annotations
 
 import dash
 import dash_bootstrap_components as dbc
-import plotly.express as px
 import plotly.graph_objects as go
 from dash import Input, Output, callback, dash_table, dcc, html
 
 from data.queries import (
-    get_district_breakdown,
-    get_district_kpis,
+    get_district_demographics,
     get_district_list,
     get_district_table,
     get_district_trend,
+    get_program_comparison,
+    get_program_totals,
 )
 
 dash.register_page(
@@ -36,26 +30,113 @@ dash.register_page(
     title="Analytics | Surus Central",
 )
 
-# ── KPI card helper ───────────────────────────────────────────────────────────
+# ── Program palette ───────────────────────────────────────────────────────────
 
-def _kpi_card(title: str, value: str, icon: str, color: str = "primary") -> dbc.Col:
-    return dbc.Col(
-        dbc.Card(
-            dbc.CardBody(
-                [
-                    html.Div(
-                        html.I(className=f"bi {icon} fs-3 text-{color}"),
-                        className="mb-1",
-                    ),
-                    html.H5(value, className="fw-bold mb-0", id=f"kpi-{title.lower().replace(' ', '-')}"),
-                    html.Small(title, className="text-muted"),
-                ],
-                className="text-center py-3",
-            ),
-            className="shadow-sm h-100",
-        ),
-        xs=6, md=3,
+PROGRAM_COLORS = {"BP": "#0d6efd", "CLP": "#198754"}
+
+# Placeholder years — update when wiring live data
+ELECTION_YEARS = ("2022", "2024")
+
+
+def _to_int(val, default: int = 0) -> int:
+    """Safely coerce a SQL aggregate result to int, handling None and NaN."""
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return default
+
+
+# ── Election balance sheet builder ────────────────────────────────────────────
+
+def _election_balance_sheet() -> list:
+    """
+    Build the static table structure for the election performance section.
+    All values are placeholders ("—") until election data is wired up.
+
+    Structure mirrors a balance sheet: section header rows divide the table
+    into logical groups, with metric label + two election-year columns each.
+
+    To wire up live data:
+      1. Add a query function in data/queries.py (e.g. get_election_stats).
+      2. Add an Output for each cell id to the master callback.
+      3. Replace the html.Td("—", id=...) children with the callback values.
+    """
+    yr1, yr2 = ELECTION_YEARS
+
+    def _section_header(label: str) -> html.Tr:
+        return html.Tr(
+            html.Td(
+                label,
+                colSpan=3,
+                className="fw-semibold text-uppercase small",
+                style={"backgroundColor": "#f0f4f8", "letterSpacing": "0.06em",
+                       "color": "#495057", "padding": "6px 12px"},
+            )
+        )
+
+    def _row(label: str, cell_id_1: str, cell_id_2: str,
+             indent: bool = False) -> html.Tr:
+        label_style = {"paddingLeft": "24px"} if indent else {}
+        return html.Tr(
+            [
+                html.Td(label, style=label_style),
+                html.Td("—", id=cell_id_1, className="text-end fw-semibold"),
+                html.Td("—", id=cell_id_2, className="text-end fw-semibold"),
+            ]
+        )
+
+    def _divider_row() -> html.Tr:
+        return html.Tr(
+            html.Td(colSpan=3, style={"padding": "2px", "backgroundColor": "#dee2e6"})
+        )
+
+    thead = html.Thead(
+        html.Tr(
+            [
+                html.Th("Metric", style={"width": "55%"}),
+                html.Th(yr1, className="text-end", style={"width": "22.5%"}),
+                html.Th(yr2, className="text-end", style={"width": "22.5%"}),
+            ],
+            style={"backgroundColor": "#e9ecef"},
+        )
     )
+
+    tbody = html.Tbody(
+        [
+            # ── Turnout ───────────────────────────────────────────────────────
+            _section_header("Turnout"),
+            _row("Overall Turnout %",
+                 "el-overall-turnout-yr1", "el-overall-turnout-yr2"),
+            _row("Total Votes Cast",
+                 "el-votes-cast-yr1",     "el-votes-cast-yr2"),
+            _row("Total Registered Voters",
+                 "el-registered-yr1",     "el-registered-yr2"),
+
+            _divider_row(),
+
+            # ── Outreach ──────────────────────────────────────────────────────
+            _section_header("Outreach"),
+            _row("Total Contacts Made",
+                 "el-contacts-yr1",       "el-contacts-yr2"),
+            _row("Unique Individuals Contacted",
+                 "el-individuals-yr1",    "el-individuals-yr2"),
+            _row("BP Contacts",
+                 "el-bp-contacts-yr1",    "el-bp-contacts-yr2",   indent=True),
+            _row("CLP Contacts",
+                 "el-clp-contacts-yr1",   "el-clp-contacts-yr2",  indent=True),
+
+            _divider_row(),
+
+            # ── Contacted Performance ─────────────────────────────────────────
+            _section_header("Contacted Performance"),
+            _row("Contacted Individual Turnout %",
+                 "el-contacted-turnout-yr1", "el-contacted-turnout-yr2"),
+            _row("Lift vs Overall Turnout",
+                 "el-lift-yr1",              "el-lift-yr2"),
+        ]
+    )
+
+    return [thead, tbody]
 
 
 # ── Layout ────────────────────────────────────────────────────────────────────
@@ -70,10 +151,10 @@ layout = dbc.Container(
             )
         ),
 
-        # ── Page-level slicer ─────────────────────────────────────────────────
-        # This single dropdown drives ALL charts below via one callback.
+        # ── Slicers row ───────────────────────────────────────────────────────
         dbc.Row(
             [
+                # District
                 dbc.Col(
                     html.Span("District:", className="fw-semibold me-2 align-middle"),
                     width="auto",
@@ -82,14 +163,43 @@ layout = dbc.Container(
                 dbc.Col(
                     dcc.Dropdown(
                         id="district-selector",
-                        options=[],          # populated on page load by a separate callback
+                        options=[],
                         placeholder="Select a district…",
                         clearable=False,
                         searchable=True,
-                        style={"minWidth": "260px"},
+                        style={"minWidth": "240px"},
                     ),
                     width="auto",
                 ),
+
+                # Divider
+                dbc.Col(html.Div(className="vr mx-2"), width="auto",
+                        className="d-flex align-items-center"),
+
+                # Program
+                dbc.Col(
+                    html.Span("Program:", className="fw-semibold me-2 align-middle"),
+                    width="auto",
+                    className="d-flex align-items-center",
+                ),
+                dbc.Col(
+                    dbc.RadioItems(
+                        id="program-selector",
+                        options=[
+                            {"label": "BP",   "value": "BP"},
+                            {"label": "CLP",  "value": "CLP"},
+                            {"label": "Both", "value": "both"},
+                        ],
+                        value="both",
+                        inline=True,
+                        inputStyle={"display": "none"},
+                        labelClassName="btn btn-outline-success btn-sm me-1",
+                        labelCheckedClassName="btn btn-success btn-sm me-1",
+                    ),
+                    width="auto",
+                ),
+
+                # Refresh
                 dbc.Col(
                     dbc.Button(
                         [html.I(className="bi bi-arrow-clockwise me-1"), "Refresh"],
@@ -108,43 +218,51 @@ layout = dbc.Container(
         # ── KPI cards ─────────────────────────────────────────────────────────
         dbc.Row(
             [
+                # Registered Voters — demographic, not program-filtered
                 dbc.Col(dbc.Card(dbc.CardBody([
-                    html.I(className="bi bi-people fs-3 text-primary mb-1"),
-                    html.H5("—", className="fw-bold mb-0", id="kpi-population"),
-                    html.Small("Total Population", className="text-muted"),
-                ], className="text-center py-3"), className="shadow-sm h-100"), xs=6, md=3),
-
-                dbc.Col(dbc.Card(dbc.CardBody([
-                    html.I(className="bi bi-cash-stack fs-3 text-success mb-1"),
-                    html.H5("—", className="fw-bold mb-0", id="kpi-income"),
-                    html.Small("Median Income", className="text-muted"),
-                ], className="text-center py-3"), className="shadow-sm h-100"), xs=6, md=3),
-
-                dbc.Col(dbc.Card(dbc.CardBody([
-                    html.I(className="bi bi-check2-square fs-3 text-warning mb-1"),
-                    html.H5("—", className="fw-bold mb-0", id="kpi-turnout"),
-                    html.Small("Voter Turnout %", className="text-muted"),
-                ], className="text-center py-3"), className="shadow-sm h-100"), xs=6, md=3),
-
-                dbc.Col(dbc.Card(dbc.CardBody([
-                    html.I(className="bi bi-person-check fs-3 text-info mb-1"),
+                    html.I(className="bi bi-person-check fs-3 text-primary mb-1"),
                     html.H5("—", className="fw-bold mb-0", id="kpi-registered"),
-                    html.Small("Registered Voters", className="text-muted"),
+                    html.Small("Total Registered Voters", className="text-muted"),
+                ], className="text-center py-3"), className="shadow-sm h-100"), xs=6, md=3),
+
+                # Unreliable Conservatives — demographic, not program-filtered
+                dbc.Col(dbc.Card(dbc.CardBody([
+                    html.I(className="bi bi-exclamation-triangle fs-3 text-warning mb-1"),
+                    html.H5("—", className="fw-bold mb-0", id="kpi-unreliable"),
+                    html.Small("Total Unreliable Conservatives", className="text-muted"),
+                ], className="text-center py-3"), className="shadow-sm h-100"), xs=6, md=3),
+
+                # Total Contacts — filtered by program selector
+                dbc.Col(dbc.Card(dbc.CardBody([
+                    html.I(className="bi bi-telephone fs-3 text-success mb-1"),
+                    html.H5("—", className="fw-bold mb-0", id="kpi-contacts"),
+                    html.Small("Total Contacts", className="text-muted"),
+                ], className="text-center py-3"), className="shadow-sm h-100"), xs=6, md=3),
+
+                # Total Events — filtered by program selector
+                dbc.Col(dbc.Card(dbc.CardBody([
+                    html.I(className="bi bi-calendar-event fs-3 text-info mb-1"),
+                    html.H5("—", className="fw-bold mb-0", id="kpi-events"),
+                    html.Small("Total Events", className="text-muted"),
                 ], className="text-center py-3"), className="shadow-sm h-100"), xs=6, md=3),
             ],
             className="mb-4 g-3",
         ),
 
-        # ── Charts row — bar + trend line side by side ────────────────────────
+        # ── Charts row ────────────────────────────────────────────────────────
         dbc.Row(
             [
+                # Program outreach comparison (grouped bar: BP vs CLP)
                 dbc.Col(
                     dbc.Card(
                         [
-                            dbc.CardHeader("Category Breakdown"),
+                            dbc.CardHeader("BP vs CLP — Outreach Comparison"),
                             dbc.CardBody(
                                 dcc.Loading(
-                                    dcc.Graph(id="chart-bar", config={"displayModeBar": False}),
+                                    dcc.Graph(
+                                        id="chart-program-comparison",
+                                        config={"displayModeBar": False},
+                                    ),
                                     type="circle", color="#0d6efd",
                                 )
                             ),
@@ -153,13 +271,18 @@ layout = dbc.Container(
                     ),
                     md=6, className="mb-4",
                 ),
+
+                # Outreach trend over time (line, filtered by program)
                 dbc.Col(
                     dbc.Card(
                         [
-                            dbc.CardHeader("Trend Over Time"),
+                            dbc.CardHeader("Outreach Trend Over Time"),
                             dbc.CardBody(
                                 dcc.Loading(
-                                    dcc.Graph(id="chart-trend", config={"displayModeBar": False}),
+                                    dcc.Graph(
+                                        id="chart-trend",
+                                        config={"displayModeBar": False},
+                                    ),
                                     type="circle", color="#0d6efd",
                                 )
                             ),
@@ -199,10 +322,7 @@ layout = dbc.Container(
                                         "border": "1px solid #dee2e6",
                                     },
                                     style_data_conditional=[
-                                        {
-                                            "if": {"row_index": "odd"},
-                                            "backgroundColor": "#f8f9fa",
-                                        }
+                                        {"if": {"row_index": "odd"}, "backgroundColor": "#f8f9fa"}
                                     ],
                                 ),
                                 type="circle", color="#0d6efd",
@@ -216,9 +336,57 @@ layout = dbc.Container(
             )
         ),
 
+        # ── Election Performance Balance Sheet ───────────────────────────────
+        dbc.Row(
+            dbc.Col(
+                dbc.Card(
+                    [
+                        dbc.CardHeader(
+                            dbc.Row(
+                                [
+                                    dbc.Col(
+                                        html.Span(
+                                            "Election Performance",
+                                            className="fw-semibold",
+                                        ),
+                                        width="auto",
+                                    ),
+                                    dbc.Col(
+                                        html.Span(
+                                            "Last 2 general election cycles",
+                                            className="text-muted small",
+                                        ),
+                                        width="auto",
+                                        className="ms-auto d-flex align-items-center",
+                                    ),
+                                ],
+                                align="center",
+                            )
+                        ),
+                        dbc.CardBody(
+                            dbc.Table(
+                                _election_balance_sheet(),
+                                bordered=True,
+                                hover=True,
+                                responsive=True,
+                                className="mb-0 election-table",
+                            ),
+                            className="p-0",
+                        ),
+                    ],
+                    className="shadow-sm",
+                ),
+                width=12,
+                className="mb-4",
+            )
+        ),
+
         # Status bar
         dbc.Row(
-            dbc.Col(html.Div(id="analytics-status", className="text-muted small mb-3"), width=12)
+            dbc.Col(
+                html.Div(id="analytics-status", className="text-muted small mb-3"),
+                width=12,
+            )
         ),
     ],
     fluid=True,
@@ -231,7 +399,7 @@ layout = dbc.Container(
 @callback(
     Output("district-selector", "options"),
     Output("district-selector", "value"),
-    Input("district-selector", "id"),   # fires once on mount
+    Input("district-selector", "id"),
 )
 def load_district_options(_):
     try:
@@ -242,111 +410,195 @@ def load_district_options(_):
         return [], None
 
 
-# ── Master callback: one Input → every chart + KPI on the page ───────────────
+# ── Master callback ───────────────────────────────────────────────────────────
 #
-# To add another chart:
-#   1. Add Output("your-new-chart-id", "figure") to the decorator.
-#   2. Build and return the new figure at the end of the return tuple.
-#   3. Add the corresponding dcc.Graph to the layout above.
+# Both slicers are Inputs — changing either rerenders every Output at once.
+# To add another chart: add an Output, build the figure, append to the return.
 
 @callback(
-    Output("kpi-population",  "children"),
-    Output("kpi-income",      "children"),
-    Output("kpi-turnout",     "children"),
-    Output("kpi-registered",  "children"),
-    Output("chart-bar",       "figure"),
-    Output("chart-trend",     "figure"),
-    Output("detail-table",    "columns"),
-    Output("detail-table",    "data"),
-    Output("analytics-status","children"),
-    Input("district-selector",       "value"),
-    Input("analytics-refresh-btn",   "n_clicks"),
+    Output("kpi-registered",          "children"),
+    Output("kpi-unreliable",          "children"),
+    Output("kpi-contacts",            "children"),
+    Output("kpi-events",              "children"),
+    Output("chart-program-comparison","figure"),
+    Output("chart-trend",             "figure"),
+    Output("detail-table",            "columns"),
+    Output("detail-table",            "data"),
+    Output("analytics-status",        "children"),
+    Input("district-selector",        "value"),
+    Input("program-selector",         "value"),
+    Input("analytics-refresh-btn",    "n_clicks"),
 )
-def update_all(district_id: str | None, _refresh):
+def update_all(district_id: str | None, program: str, _):
     from data.queries import bust_cache
 
     if dash.callback_context.triggered_id == "analytics-refresh-btn":
         bust_cache()
 
-    # Nothing selected yet — return blank state
     if not district_id:
-        blank = go.Figure()
-        blank.update_layout(
-            annotations=[dict(text="Select a district above", x=0.5, y=0.5,
-                              xref="paper", yref="paper", showarrow=False,
-                              font=dict(color="#adb5bd", size=14))],
-            margin=dict(t=20, b=20, l=20, r=20),
-        )
+        blank = _placeholder_fig("Select a district above")
         return "—", "—", "—", "—", blank, blank, [], [], ""
 
-    # ── Fetch all data ────────────────────────────────────────────────────────
     try:
-        kpis      = get_district_kpis(district_id)
-        breakdown = get_district_breakdown(district_id)
-        trend     = get_district_trend(district_id)
-        detail    = get_district_table(district_id)
+        demographics = get_district_demographics(district_id)
+        prog_totals  = get_program_totals(district_id, program)
+        comparison   = get_program_comparison(district_id)
+        trend        = get_district_trend(district_id, program)
+        detail       = get_district_table(district_id)
     except Exception as exc:
         blank = _error_fig(str(exc))
         return "Err", "Err", "Err", "Err", blank, blank, [], [], f"Error: {exc}"
 
     # ── KPI values ────────────────────────────────────────────────────────────
-    pop       = f"{int(kpis.get('total_population', 0)):,}"
-    income    = f"${int(kpis.get('median_income', 0)):,}"
-    turnout   = f"{kpis.get('voter_turnout_pct', 0):.1f}%"
-    registered = f"{int(kpis.get('registered_voters', 0)):,}"
+    registered  = f"{_to_int(demographics.get('registered_voters')):,}"
+    unreliable  = f"{_to_int(demographics.get('unreliable_conservatives')):,}"
+    contacts    = f"{_to_int(prog_totals.get('total_contacts')):,}"
+    events      = f"{_to_int(prog_totals.get('total_events')):,}"
 
-    # ── Bar chart: category breakdown ─────────────────────────────────────────
-    if breakdown.empty:
-        bar_fig = _error_fig("No breakdown data for this district.")
-    else:
-        bar_fig = px.bar(
-            breakdown,
-            x="value",
-            y="category",
-            orientation="h",
-            color="value",
-            color_continuous_scale="Blues",
-            labels={"value": "Value", "category": ""},
-        )
-        bar_fig.update_layout(
-            coloraxis_showscale=False,
-            margin=dict(t=10, b=30, l=10, r=10),
-            yaxis=dict(categoryorder="total ascending"),
-            plot_bgcolor="white",
-            paper_bgcolor="white",
-        )
-        bar_fig.update_xaxes(showgrid=True, gridcolor="#f0f0f0")
-        bar_fig.update_yaxes(showgrid=False)
+    # ── Program comparison grouped bar ────────────────────────────────────────
+    programs_to_show = ["BP", "CLP"] if program == "both" else [program]
+    comp_fig = go.Figure()
 
-    # ── Line chart: trend over time ───────────────────────────────────────────
+    for prog in programs_to_show:
+        row = comparison[comparison["program"] == prog]
+        if row.empty:
+            continue
+        c_val = _to_int(row["contacts"].iloc[0])
+        e_val = _to_int(row["events"].iloc[0])
+        comp_fig.add_trace(
+            go.Bar(
+                name=prog,
+                x=["Contacts", "Events"],
+                y=[c_val, e_val],
+                marker_color=PROGRAM_COLORS.get(prog, "#6c757d"),
+                text=[f"{c_val:,}", f"{e_val:,}"],
+                textposition="outside",
+            )
+        )
+
+    comp_fig.update_layout(
+        barmode="group",
+        margin=dict(t=20, b=30, l=10, r=10),
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        yaxis=dict(showgrid=True, gridcolor="#f0f0f0"),
+        xaxis=dict(showgrid=False),
+    )
+
+    if comp_fig.data == ():
+        comp_fig = _error_fig("No comparison data for this district.")
+
+    # ── Trend line ────────────────────────────────────────────────────────────
     if trend.empty:
-        trend_fig = _error_fig("No trend data for this district.")
+        trend_fig = _error_fig("No trend data for this selection.")
     else:
-        trend_fig = px.line(
-            trend,
-            x="period",
-            y="metric_value",
-            markers=True,
-            labels={"period": "", "metric_value": "Value"},
-        )
-        trend_fig.update_traces(line_color="#0d6efd", line_width=2)
+        trend_fig = go.Figure()
+        # When "both" is selected, draw one line per program
+        if "program" in trend.columns and program == "both":
+            for prog in ["BP", "CLP"]:
+                subset = trend[trend["program"] == prog]
+                if not subset.empty:
+                    trend_fig.add_trace(
+                        go.Scatter(
+                            x=subset["period"],
+                            y=subset["metric_value"],
+                            mode="lines+markers",
+                            name=prog,
+                            line=dict(color=PROGRAM_COLORS.get(prog, "#6c757d"), width=2),
+                        )
+                    )
+        else:
+            trend_fig.add_trace(
+                go.Scatter(
+                    x=trend["period"],
+                    y=trend["metric_value"],
+                    mode="lines+markers",
+                    name=program.upper() if program != "both" else "Total",
+                    line=dict(color="#0d6efd", width=2),
+                )
+            )
         trend_fig.update_layout(
-            margin=dict(t=10, b=30, l=10, r=10),
+            margin=dict(t=20, b=30, l=10, r=10),
             plot_bgcolor="white",
             paper_bgcolor="white",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            xaxis=dict(showgrid=False),
+            yaxis=dict(showgrid=True, gridcolor="#f0f0f0"),
         )
-        trend_fig.update_xaxes(showgrid=False)
-        trend_fig.update_yaxes(showgrid=True, gridcolor="#f0f0f0")
 
-    # ── Data table ────────────────────────────────────────────────────────────
+    # ── Detail table ──────────────────────────────────────────────────────────
     if detail.empty:
         table_cols, table_data = [], []
     else:
         table_cols = [{"name": c, "id": c} for c in detail.columns]
         table_data = detail.to_dict("records")
 
-    status = f"District: {district_id} · {len(detail):,} records"
-    return pop, income, turnout, registered, bar_fig, trend_fig, table_cols, table_data, status
+    prog_label = program.upper() if program != "both" else "BP + CLP"
+    status = f"District: {district_id} · Program: {prog_label} · {len(detail):,} records"
+    return (
+        registered, unreliable, contacts, events,
+        comp_fig, trend_fig,
+        table_cols, table_data,
+        status,
+    )
+
+
+# ── Election balance sheet callback ──────────────────────────────────────────
+#
+# Responds to the district filter so the section clears/updates with every
+# district change. All values are "—" stubs until election data is wired up.
+#
+# To add live data:
+#   1. Write a query function in data/queries.py (e.g. get_election_stats).
+#   2. Call it here with district_id.
+#   3. Replace the "—" returns with the actual formatted values.
+
+_ELECTION_CELL_IDS = [
+    "el-overall-turnout-yr1",  "el-overall-turnout-yr2",
+    "el-votes-cast-yr1",       "el-votes-cast-yr2",
+    "el-registered-yr1",       "el-registered-yr2",
+    "el-contacts-yr1",         "el-contacts-yr2",
+    "el-individuals-yr1",      "el-individuals-yr2",
+    "el-bp-contacts-yr1",      "el-bp-contacts-yr2",
+    "el-clp-contacts-yr1",     "el-clp-contacts-yr2",
+    "el-contacted-turnout-yr1","el-contacted-turnout-yr2",
+    "el-lift-yr1",             "el-lift-yr2",
+]
+
+@callback(
+    *[Output(cid, "children") for cid in _ELECTION_CELL_IDS],
+    Input("district-selector",     "value"),
+    Input("analytics-refresh-btn", "n_clicks"),
+)
+def update_election_section(district_id: str | None, _):
+    blank = ("—",) * len(_ELECTION_CELL_IDS)
+
+    if not district_id:
+        return blank
+
+    # TODO: replace stubs with live election data once queries are ready.
+    # Example:
+    #   stats = get_election_stats(district_id)   # returns dict keyed by yr1/yr2
+    #   return (
+    #       f"{stats['yr1']['overall_turnout']:.1f}%",
+    #       f"{stats['yr2']['overall_turnout']:.1f}%",
+    #       ...
+    #   )
+    return blank
+
+
+# ── Figure helpers ────────────────────────────────────────────────────────────
+
+def _placeholder_fig(message: str) -> go.Figure:
+    fig = go.Figure()
+    fig.add_annotation(
+        text=message, x=0.5, y=0.5, xref="paper", yref="paper",
+        showarrow=False, font=dict(size=14, color="#adb5bd"),
+    )
+    fig.update_layout(margin=dict(t=20, b=20, l=20, r=20),
+                      plot_bgcolor="white", paper_bgcolor="white")
+    return fig
 
 
 def _error_fig(message: str) -> go.Figure:
@@ -355,5 +607,6 @@ def _error_fig(message: str) -> go.Figure:
         text=message, x=0.5, y=0.5, xref="paper", yref="paper",
         showarrow=False, font=dict(size=13, color="#dc3545"),
     )
-    fig.update_layout(margin=dict(t=20, b=20, l=20, r=20))
+    fig.update_layout(margin=dict(t=20, b=20, l=20, r=20),
+                      plot_bgcolor="white", paper_bgcolor="white")
     return fig
