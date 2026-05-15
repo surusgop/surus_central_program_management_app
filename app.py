@@ -3,6 +3,8 @@ import dash
 import dash_bootstrap_components as dbc
 from dotenv import load_dotenv
 
+from auth import register_auth
+
 load_dotenv()
 
 app = dash.Dash(
@@ -13,6 +15,7 @@ app = dash.Dash(
     title="Surus Central",
 )
 server = app.server  # expose Flask server for gunicorn
+register_auth(server)
 
 from components.navbar import navbar  # noqa: E402 — needs app defined first
 
