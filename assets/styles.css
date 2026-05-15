@@ -1,0 +1,23 @@
+/* Surus Central — global overrides */
+
+body {
+    background-color: #f8f9fa;
+}
+
+/* Button-radio slicer: remove outline on focus */
+.btn-check:focus + .btn,
+.btn:focus {
+    box-shadow: none;
+}
+
+/* Map card edge-to-edge within its column */
+.js-plotly-plot .plotly,
+.js-plotly-plot .plotly div {
+    border-radius: 6px;
+}
+
+/* Navbar brand emphasis */
+.navbar-brand {
+    font-weight: 700;
+    letter-spacing: 0.02em;
+}

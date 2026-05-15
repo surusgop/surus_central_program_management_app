@@ -1,0 +1,12 @@
+[build]
+builder = "dockerfile"
+
+[deploy]
+startCommand = "gunicorn app:server --bind 0.0.0.0:$PORT --workers 2 --timeout 120"
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 3
+
+[deploy.healthcheck]
+path = "/"
+initialDelaySeconds = 20
+timeoutSeconds = 10
