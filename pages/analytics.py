@@ -456,7 +456,8 @@ def load_district_options(_):
         options = get_district_list()
         default = options[0]["value"] if options else None
         return options, default
-    except Exception:
+    except Exception as exc:
+        print(f"[analytics] district list failed: {exc}", flush=True)
         return [], None
 
 
@@ -505,27 +506,32 @@ def update_all(
 
     try:
         demographics = get_district_demographics(district_id)
-    except Exception:
+    except Exception as exc:
+        print(f"[analytics] demographics failed: {exc}", flush=True)
         demographics = {}
 
     try:
         prog_totals = get_program_totals(district_id, program, start_date, end_date)
-    except Exception:
+    except Exception as exc:
+        print(f"[analytics] program totals failed: {exc}", flush=True)
         prog_totals = {}
 
     try:
         comparison = get_program_comparison(district_id, start_date, end_date)
-    except Exception:
+    except Exception as exc:
+        print(f"[analytics] comparison failed: {exc}", flush=True)
         comparison = pd.DataFrame(columns=["program", "contacts", "events"])
 
     try:
         trend = get_district_trend(district_id, program, start_date, end_date)
-    except Exception:
+    except Exception as exc:
+        print(f"[analytics] trend failed: {exc}", flush=True)
         trend = pd.DataFrame()
 
     try:
         detail = get_district_table(district_id)
-    except Exception:
+    except Exception as exc:
+        print(f"[analytics] detail table failed: {exc}", flush=True)
         detail = pd.DataFrame()
 
     # ── KPI values ────────────────────────────────────────────────────────────
