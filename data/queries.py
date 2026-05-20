@@ -161,7 +161,7 @@ def get_district_list() -> list[dict]:
         SELECT DISTINCT state_upper_district AS district_id
         FROM   universal.deltatables.vcs_gold
         WHERE  `registered_address.state` = 'IL'
-        ORDER  BY state_upper_district
+        ORDER  BY district_id
     """
     df = _cached(key="district_list", fn=functools.partial(run_query, sql_str))
     return [
