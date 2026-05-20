@@ -13,6 +13,7 @@ from datetime import date
 
 import dash
 import dash_bootstrap_components as dbc
+import pandas as pd
 import plotly.graph_objects as go
 from dash import Input, Output, callback, dash_table, dcc, html
 
@@ -504,13 +505,28 @@ def update_all(
 
     try:
         demographics = get_district_demographics(district_id)
-        prog_totals  = get_program_totals(district_id, program, start_date, end_date)
-        comparison   = get_program_comparison(district_id, start_date, end_date)
-        trend        = get_district_trend(district_id, program, start_date, end_date)
-        detail       = get_district_table(district_id)
-    except Exception as exc:
-        blank = _error_fig(str(exc))
-        return "Err", "Err", "Err", "Err", contacts_label, events_label, blank, blank, [], [], f"Error: {exc}"
+    except Exception:
+        demographics = {}
+
+    try:
+        prog_totals = get_program_totals(district_id, program, start_date, end_date)
+    except Exception:
+        prog_totals = {}
+
+    try:
+        comparison = get_program_comparison(district_id, start_date, end_date)
+    except Exception:
+        comparison = pd.DataFrame(columns=["program", "contacts", "events"])
+
+    try:
+        trend = get_district_trend(district_id, program, start_date, end_date)
+    except Exception:
+        trend = pd.DataFrame()
+
+    try:
+        detail = get_district_table(district_id)
+    except Exception:
+        detail = pd.DataFrame()
 
     # ── KPI values ────────────────────────────────────────────────────────────
     registered  = f"{_to_int(demographics.get('registered_voters')):,}"
