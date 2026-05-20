@@ -158,13 +158,14 @@ def get_district_list() -> list[dict]:
     district dropdown slicer.  Replace the query with your actual source.
     """
     sql_str = """
-        SELECT DISTINCT district_id, district_name
-        FROM   your_catalog.your_schema.districts
-        ORDER  BY district_name
+        SELECT DISTINCT state_upper_district AS district_id
+        FROM   universal.deltatables.vcs_gold
+        WHERE  `registered_address.state` = 'IL'
+        ORDER  BY state_upper_district
     """
     df = _cached(key="district_list", fn=functools.partial(run_query, sql_str))
     return [
-        {"label": row["district_name"], "value": row["district_id"]}
+        {"label": row["district_id"], "value": row["district_id"]}
         for _, row in df.iterrows()
     ]
 
@@ -182,10 +183,10 @@ def get_district_demographics(district_id: str) -> dict:
     """
     sql_str = f"""
         SELECT
-            SUM(registered_voters)        AS registered_voters,
-            SUM(unreliable_conservatives) AS unreliable_conservatives
-        FROM   your_catalog.your_schema.district_demographics
-        WHERE  district_id = '{district_id}'
+            count(external_id) AS registered_voters,
+            sum(case when `custom_fields.surus_voter_segmentation` = 'Republican Turnout' then 1 else 0 end) AS unreliable_conservatives
+        FROM   universal.deltatables.vcs_gold
+        WHERE  state_upper_district = '{district_id}'
     """
     df = _cached(
         key=f"demographics:{district_id}",
@@ -194,13 +195,23 @@ def get_district_demographics(district_id: str) -> dict:
     return df.iloc[0].to_dict() if not df.empty else {}
 
 
-def get_program_totals(district_id: str, program: str) -> dict:
+def get_program_totals(
+    district_id: str,
+    program: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> dict:
     """
     Aggregate contacts and events for the selected district, optionally
-    filtered to one program (BP or CLP).  Pass program='both' for combined.
+    filtered to one program (BP or CLP) and a date range.
+    Pass program='both' for combined totals.
     Returns a dict with keys total_contacts, total_events.
     """
     prog_filter = f"AND program = '{program}'" if program != "both" else ""
+    date_filter = (
+        f"AND activity_week BETWEEN '{start_date}' AND '{end_date}'"
+        if start_date and end_date else ""
+    )
     sql_str = f"""
         SELECT
             SUM(contacts) AS total_contacts,
@@ -208,21 +219,31 @@ def get_program_totals(district_id: str, program: str) -> dict:
         FROM   your_catalog.your_schema.outreach_activity
         WHERE  district_id = '{district_id}'
         {prog_filter}
+        {date_filter}
     """
     df = _cached(
-        key=f"program_totals:{district_id}:{program}",
+        key=f"program_totals:{district_id}:{program}:{start_date}:{end_date}",
         fn=functools.partial(run_query, sql_str),
     )
     return df.iloc[0].to_dict() if not df.empty else {}
 
 
-def get_program_comparison(district_id: str) -> pd.DataFrame:
+def get_program_comparison(
+    district_id: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> pd.DataFrame:
     """
     Contacts and events broken down by program (BP, CLP) for the comparison
-    bar chart.  Always returns both programs so the chart can group them;
+    bar chart, optionally filtered to a date range.
+    Always returns both programs so the chart can group them;
     filtering to one program is handled in the page callback.
     Returns columns [program, contacts, events].
     """
+    date_filter = (
+        f"AND activity_week BETWEEN '{start_date}' AND '{end_date}'"
+        if start_date and end_date else ""
+    )
     sql_str = f"""
         SELECT
             program,
@@ -231,28 +252,39 @@ def get_program_comparison(district_id: str) -> pd.DataFrame:
         FROM   your_catalog.your_schema.outreach_activity
         WHERE  district_id = '{district_id}'
           AND  program IN ('BP', 'CLP')
+        {date_filter}
         GROUP  BY program
         ORDER  BY program
     """
     return _cached(
-        key=f"program_comparison:{district_id}",
+        key=f"program_comparison:{district_id}:{start_date}:{end_date}",
         fn=functools.partial(run_query, sql_str),
     )
 
 
-def get_district_trend(district_id: str, program: str = "both") -> pd.DataFrame:
+def get_district_trend(
+    district_id: str,
+    program: str = "both",
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> pd.DataFrame:
     """
-    Time-series outreach data for the selected district and program.
+    Time-series outreach data for the selected district, program, and date range.
     When program='both', returns columns [period, program, metric_value]
     so the trend chart can draw one line per program.
     When a single program is selected, returns [period, metric_value].
     """
+    date_filter = (
+        f"AND activity_week BETWEEN '{start_date}' AND '{end_date}'"
+        if start_date and end_date else ""
+    )
     if program == "both":
         sql_str = f"""
             SELECT period, program, SUM(contacts + events) AS metric_value
             FROM   your_catalog.your_schema.outreach_activity
             WHERE  district_id = '{district_id}'
               AND  program IN ('BP', 'CLP')
+            {date_filter}
             GROUP  BY period, program
             ORDER  BY period, program
         """
@@ -262,11 +294,12 @@ def get_district_trend(district_id: str, program: str = "both") -> pd.DataFrame:
             FROM   your_catalog.your_schema.outreach_activity
             WHERE  district_id = '{district_id}'
               AND  program = '{program}'
+            {date_filter}
             GROUP  BY period
             ORDER  BY period
         """
     return _cached(
-        key=f"trend:{district_id}:{program}",
+        key=f"trend:{district_id}:{program}:{start_date}:{end_date}",
         fn=functools.partial(run_query, sql_str),
     )
 

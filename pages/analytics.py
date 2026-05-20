@@ -9,6 +9,8 @@ Outputs simultaneously, so every visual updates in one round-trip.
 
 from __future__ import annotations
 
+from datetime import date
+
 import dash
 import dash_bootstrap_components as dbc
 import plotly.graph_objects as go
@@ -44,6 +46,15 @@ def _to_int(val, default: int = 0) -> int:
         return int(val)
     except (TypeError, ValueError):
         return default
+
+
+def _fmt_date_range(start_date: str | None, end_date: str | None) -> str:
+    """Return a human-readable date range label for KPI card subtitles."""
+    if not start_date or not end_date:
+        return "All time"
+    from datetime import datetime
+    fmt = lambda d: datetime.strptime(d[:10], "%Y-%m-%d").strftime("%b %d, %Y").replace(" 0", " ")
+    return f"{fmt(start_date)} – {fmt(end_date)}"
 
 
 # ── Election balance sheet builder ────────────────────────────────────────────
@@ -215,6 +226,44 @@ layout = dbc.Container(
             className="mb-4 align-items-center",
         ),
 
+        # ── Date range row ────────────────────────────────────────────────────
+        # Affects: Contacts KPI, Events KPI, comparison bar, trend chart.
+        # Does NOT affect: Registered Voters, Unreliable Conservatives (snapshots).
+        dbc.Row(
+            [
+                dbc.Col(
+                    html.Span("Date Range:", className="fw-semibold me-2 align-middle"),
+                    width="auto",
+                    className="d-flex align-items-center",
+                ),
+                dbc.Col(
+                    dcc.DatePickerRange(
+                        id="date-range",
+                        start_date=date(date.today().year, 1, 1).isoformat(),
+                        end_date=date.today().isoformat(),
+                        min_date_allowed="2018-01-01",
+                        max_date_allowed=date.today().isoformat(),
+                        display_format="MMM D, YYYY",
+                        clearable=True,
+                    ),
+                    width="auto",
+                ),
+                dbc.Col(
+                    html.Span(
+                        [
+                            html.I(className="bi bi-info-circle me-1 text-muted"),
+                            "Affects Contacts, Events, and trend chart. "
+                            "Clear to show all time.",
+                        ],
+                        className="text-muted small",
+                    ),
+                    width="auto",
+                    className="d-flex align-items-center ms-2",
+                ),
+            ],
+            className="mb-4 align-items-center",
+        ),
+
         # ── KPI cards ─────────────────────────────────────────────────────────
         dbc.Row(
             [
@@ -232,18 +281,18 @@ layout = dbc.Container(
                     html.Small("Total Unreliable Conservatives", className="text-muted"),
                 ], className="text-center py-3"), className="shadow-sm h-100"), xs=6, md=3),
 
-                # Total Contacts — filtered by program selector
+                # Total Contacts — filtered by program and date range
                 dbc.Col(dbc.Card(dbc.CardBody([
                     html.I(className="bi bi-telephone fs-3 text-success mb-1"),
                     html.H5("—", className="fw-bold mb-0", id="kpi-contacts"),
-                    html.Small("Total Contacts", className="text-muted"),
+                    html.Small("Total Contacts", className="text-muted", id="kpi-contacts-label"),
                 ], className="text-center py-3"), className="shadow-sm h-100"), xs=6, md=3),
 
-                # Total Events — filtered by program selector
+                # Total Events — filtered by program and date range
                 dbc.Col(dbc.Card(dbc.CardBody([
                     html.I(className="bi bi-calendar-event fs-3 text-info mb-1"),
                     html.H5("—", className="fw-bold mb-0", id="kpi-events"),
-                    html.Small("Total Events", className="text-muted"),
+                    html.Small("Total Events", className="text-muted", id="kpi-events-label"),
                 ], className="text-center py-3"), className="shadow-sm h-100"), xs=6, md=3),
             ],
             className="mb-4 g-3",
@@ -420,6 +469,8 @@ def load_district_options(_):
     Output("kpi-unreliable",          "children"),
     Output("kpi-contacts",            "children"),
     Output("kpi-events",              "children"),
+    Output("kpi-contacts-label",      "children"),
+    Output("kpi-events-label",        "children"),
     Output("chart-program-comparison","figure"),
     Output("chart-trend",             "figure"),
     Output("detail-table",            "columns"),
@@ -427,27 +478,39 @@ def load_district_options(_):
     Output("analytics-status",        "children"),
     Input("district-selector",        "value"),
     Input("program-selector",         "value"),
+    Input("date-range",               "start_date"),
+    Input("date-range",               "end_date"),
     Input("analytics-refresh-btn",    "n_clicks"),
 )
-def update_all(district_id: str | None, program: str, _):
+def update_all(
+    district_id: str | None,
+    program: str,
+    start_date: str | None,
+    end_date: str | None,
+    _,
+):
     from data.queries import bust_cache
 
     if dash.callback_context.triggered_id == "analytics-refresh-btn":
         bust_cache()
 
+    date_label = _fmt_date_range(start_date, end_date)
+    contacts_label = f"Total Contacts · {date_label}"
+    events_label   = f"Total Events · {date_label}"
+
     if not district_id:
         blank = _placeholder_fig("Select a district above")
-        return "—", "—", "—", "—", blank, blank, [], [], ""
+        return "—", "—", "—", "—", contacts_label, events_label, blank, blank, [], [], ""
 
     try:
         demographics = get_district_demographics(district_id)
-        prog_totals  = get_program_totals(district_id, program)
-        comparison   = get_program_comparison(district_id)
-        trend        = get_district_trend(district_id, program)
+        prog_totals  = get_program_totals(district_id, program, start_date, end_date)
+        comparison   = get_program_comparison(district_id, start_date, end_date)
+        trend        = get_district_trend(district_id, program, start_date, end_date)
         detail       = get_district_table(district_id)
     except Exception as exc:
         blank = _error_fig(str(exc))
-        return "Err", "Err", "Err", "Err", blank, blank, [], [], f"Error: {exc}"
+        return "Err", "Err", "Err", "Err", contacts_label, events_label, blank, blank, [], [], f"Error: {exc}"
 
     # ── KPI values ────────────────────────────────────────────────────────────
     registered  = f"{_to_int(demographics.get('registered_voters')):,}"
@@ -535,9 +598,10 @@ def update_all(district_id: str | None, program: str, _):
         table_data = detail.to_dict("records")
 
     prog_label = program.upper() if program != "both" else "BP + CLP"
-    status = f"District: {district_id} · Program: {prog_label} · {len(detail):,} records"
+    status = f"District: {district_id} · Program: {prog_label} · {date_label} · {len(detail):,} records"
     return (
         registered, unreliable, contacts, events,
+        contacts_label, events_label,
         comp_fig, trend_fig,
         table_cols, table_data,
         status,
