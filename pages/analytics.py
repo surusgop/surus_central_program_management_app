@@ -567,37 +567,50 @@ def update_client_options(states: list[str] | None, program: str):
     Output("detail-table",            "columns"),
     Output("detail-table",            "data"),
     Output("analytics-status",        "children"),
+    Input("state-selector",           "value"),
     Input("district-selector",        "value"),
     Input("client-selector",          "value"),
     Input("program-selector",         "value"),
     Input("date-range",               "start_date"),
     Input("date-range",               "end_date"),
     Input("analytics-refresh-btn",    "n_clicks"),
-    State("state-selector",           "value"),
-    State("district-selector",        "options"),
-    State("client-selector",          "options"),
 )
 def update_all(
+    state_ids: list[str] | None,
     district_ids: list[str] | None,
     client_ids: list[str] | None,
     program: str,
     start_date: str | None,
     end_date: str | None,
     _,
-    state_ids: list[str] | None,
-    district_options: list[dict] | None,
-    client_options: list[dict] | None,
 ):
     from data.queries import bust_cache
 
     if dash.callback_context.triggered_id == "analytics-refresh-btn":
         bust_cache()
 
-    # Resolve effective scope:
-    # explicit selection → use it; no selection but options exist → use all in scope;
-    # no options at all (no state selected) → None = ecosystem wide / no filter.
-    effective_districts = district_ids or [o["value"] for o in (district_options or [])] or None
-    effective_clients   = client_ids   or [o["value"] for o in (client_options   or [])] or None
+    # Resolve effective scope using cached query functions directly.
+    # Explicit selection takes priority; otherwise fall back to all items in
+    # scope for the selected states; no state → None = no filter (ecosystem wide).
+    if district_ids:
+        effective_districts = district_ids
+    elif state_ids:
+        try:
+            effective_districts = [o["value"] for o in get_district_list(state_ids)] or None
+        except Exception:
+            effective_districts = None
+    else:
+        effective_districts = None
+
+    if client_ids:
+        effective_clients = client_ids
+    elif state_ids:
+        try:
+            effective_clients = [o["value"] for o in get_client_list(state_ids, program)] or None
+        except Exception:
+            effective_clients = None
+    else:
+        effective_clients = None
 
     date_label     = _fmt_date_range(start_date, end_date)
     contacts_label = f"Total Contacts · {date_label}"
