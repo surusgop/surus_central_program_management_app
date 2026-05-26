@@ -83,7 +83,7 @@ def bust_cache():
 
 def _list_key(values: list[str] | None) -> str:
     """Deterministic cache-key fragment for a list of strings."""
-    return "|".join(sorted(values)) if values else ""
+    return "|".join(sorted(str(v) for v in values)) if values else ""
 
 
 def _in_filter(column: str, values: list[str] | None) -> str:
@@ -234,7 +234,7 @@ def get_district_list(states: list[str]) -> list[dict]:
         fn=functools.partial(run_query, sql_str, label="district_list"),
     )
     return [
-        {"label": row["district_id"], "value": row["district_id"]}
+        {"label": str(row["district_id"]), "value": str(row["district_id"])}
         for _, row in df.iterrows()
     ]
 
