@@ -78,6 +78,19 @@ def bust_cache():
         _cache.clear()
 
 
+def _list_key(values: list[str] | None) -> str:
+    """Deterministic cache-key fragment for a list of strings."""
+    return "|".join(sorted(values)) if values else ""
+
+
+def _in_filter(column: str, values: list[str] | None) -> str:
+    """Build an 'AND column IN (...)' clause, or '' when values is empty."""
+    if not values:
+        return ""
+    escaped = ", ".join(f"'{v}'" for v in values)
+    return f"AND {column} IN ({escaped})"
+
+
 # ── Heatmap variable registry ─────────────────────────────────────────────────
 #
 # Add / remove entries here to control what appears in the variable slicer.
@@ -152,18 +165,71 @@ def get_filter_options(table: str, column: str) -> list[str]:
     return df["val"].dropna().astype(str).tolist()
 
 
-def get_district_list() -> list[dict]:
+def get_state_list() -> list[dict]:
+    """Return [{label: "IL", value: "IL"}, ...] for the state dropdown."""
+    sql_str = """
+        SELECT DISTINCT `registered_address.state` AS state_abbr
+        FROM   universal.deltatables.vcs_gold
+        WHERE  `registered_address.state` IS NOT NULL
+        ORDER  BY state_abbr
+    """
+    df = _cached(key="state_list", fn=functools.partial(run_query, sql_str))
+    return [
+        {"label": row["state_abbr"], "value": row["state_abbr"]}
+        for _, row in df.iterrows()
+    ]
+
+
+def get_client_list(states: list[str], program: str) -> list[dict]:
+    """
+    Return [{label: "nation-slug", value: "nation-slug"}, ...] for the client
+    dropdown, filtered to the selected states and program.
+    When program='both', labels include the program in parentheses.
+    """
+    if not states:
+        return []
+    prog_filter   = "`group` IN ('CLP', 'BP')" if program == "both" else f"`group` = '{program}'"
+    state_filter  = _in_filter("state", states)
+    sql_str = f"""
+        SELECT DISTINCT nation, `group`
+        FROM   universal.prod.signups
+        WHERE  {prog_filter}
+        {state_filter}
+        ORDER  BY nation
+    """
+    df = _cached(
+        key=f"client_list:{_list_key(states)}:{program}",
+        fn=functools.partial(run_query, sql_str),
+    )
+    show_group = program == "both"
+    return [
+        {
+            "label": f"{row['nation']} ({row['group']})" if show_group else row["nation"],
+            "value": row["nation"],
+        }
+        for _, row in df.iterrows()
+    ]
+
+
+def get_district_list(states: list[str]) -> list[dict]:
     """
     Return [{label: "District Name", value: "district_id"}, ...] for the
-    district dropdown slicer.  Replace the query with your actual source.
+    district dropdown, filtered to the selected states.
     """
-    sql_str = """
+    if not states:
+        return []
+    state_filter = _in_filter("`registered_address.state`", states)
+    sql_str = f"""
         SELECT DISTINCT state_upper_district AS district_id
         FROM   universal.deltatables.vcs_gold
-        WHERE  `registered_address.state` = 'IL'
+        WHERE  1=1
+        {state_filter}
         ORDER  BY district_id
     """
-    df = _cached(key="district_list", fn=functools.partial(run_query, sql_str))
+    df = _cached(
+        key=f"district_list:{_list_key(states)}",
+        fn=functools.partial(run_query, sql_str),
+    )
     return [
         {"label": row["district_id"], "value": row["district_id"]}
         for _, row in df.iterrows()
@@ -175,116 +241,128 @@ def get_district_list() -> list[dict]:
 # Each function accepts a district_id and returns a DataFrame for one chart.
 # Replace catalog/schema/table references with your actual names.
 
-def get_district_demographics(district_id: str) -> dict:
+def get_district_demographics(district_ids: list[str] | None = None) -> dict:
     """
-    Voter-file demographics for the selected district (not program-filtered).
+    Voter-file demographics aggregated across the given districts.
+    Pass None or [] for ecosystem-wide totals.
     Returns a dict of {metric_name: value}.
-    Replace with your actual voter file / targeting table.
     """
+    scope_filter = _in_filter("state_upper_district", district_ids)
     sql_str = f"""
         SELECT
             count(external_id) AS registered_voters,
             sum(case when `custom_fields.surus_voter_segmentation` = 'Republican Turnout' then 1 else 0 end) AS unreliable_conservatives
         FROM   universal.deltatables.vcs_gold
-        WHERE  state_upper_district = '{district_id}'
+        WHERE  1=1
+        {scope_filter}
     """
     df = _cached(
-        key=f"demographics:{district_id}",
+        key=f"demographics:{_list_key(district_ids)}",
         fn=functools.partial(run_query, sql_str),
     )
     return df.iloc[0].to_dict() if not df.empty else {}
 
 
 def get_program_totals(
-    district_id: str,
+    district_ids: list[str] | None,
     program: str,
     start_date: str | None = None,
     end_date: str | None = None,
+    client_ids: list[str] | None = None,
 ) -> dict:
     """
-    Aggregate contacts and events for the selected district, optionally
-    filtered to one program (BP or CLP) and a date range.
-    Pass program='both' for combined totals.
+    Aggregate contacts and events across the given districts and clients.
+    Pass None/[] for either to include all.  program='both' for combined totals.
     Returns a dict with keys total_contacts, total_events.
     """
-    prog_filter = f"AND program = '{program}'" if program != "both" else ""
-    date_filter = (
+    prog_filter     = f"AND program = '{program}'" if program != "both" else ""
+    date_filter     = (
         f"AND activity_week BETWEEN '{start_date}' AND '{end_date}'"
         if start_date and end_date else ""
     )
+    district_filter = _in_filter("district_id", district_ids)
+    client_filter   = _in_filter("nation", client_ids)
     sql_str = f"""
         SELECT
             SUM(contacts) AS total_contacts,
             SUM(events)   AS total_events
         FROM   your_catalog.your_schema.outreach_activity
-        WHERE  district_id = '{district_id}'
+        WHERE  1=1
+        {district_filter}
         {prog_filter}
         {date_filter}
+        {client_filter}
     """
     df = _cached(
-        key=f"program_totals:{district_id}:{program}:{start_date}:{end_date}",
+        key=f"program_totals:{_list_key(district_ids)}:{program}:{start_date}:{end_date}:{_list_key(client_ids)}",
         fn=functools.partial(run_query, sql_str),
     )
     return df.iloc[0].to_dict() if not df.empty else {}
 
 
 def get_program_comparison(
-    district_id: str,
+    district_ids: list[str] | None,
     start_date: str | None = None,
     end_date: str | None = None,
+    client_ids: list[str] | None = None,
 ) -> pd.DataFrame:
     """
-    Contacts and events broken down by program (BP, CLP) for the comparison
-    bar chart, optionally filtered to a date range.
-    Always returns both programs so the chart can group them;
-    filtering to one program is handled in the page callback.
+    Contacts and events broken down by program (BP, CLP) across the given
+    districts and clients.  Pass None/[] to include all.
     Returns columns [program, contacts, events].
     """
-    date_filter = (
+    date_filter     = (
         f"AND activity_week BETWEEN '{start_date}' AND '{end_date}'"
         if start_date and end_date else ""
     )
+    district_filter = _in_filter("district_id", district_ids)
+    client_filter   = _in_filter("nation", client_ids)
     sql_str = f"""
         SELECT
             program,
             SUM(contacts) AS contacts,
             SUM(events)   AS events
         FROM   your_catalog.your_schema.outreach_activity
-        WHERE  district_id = '{district_id}'
-          AND  program IN ('BP', 'CLP')
+        WHERE  program IN ('BP', 'CLP')
+        {district_filter}
         {date_filter}
+        {client_filter}
         GROUP  BY program
         ORDER  BY program
     """
     return _cached(
-        key=f"program_comparison:{district_id}:{start_date}:{end_date}",
+        key=f"program_comparison:{_list_key(district_ids)}:{start_date}:{end_date}:{_list_key(client_ids)}",
         fn=functools.partial(run_query, sql_str),
     )
 
 
 def get_district_trend(
-    district_id: str,
+    district_ids: list[str] | None,
     program: str = "both",
     start_date: str | None = None,
     end_date: str | None = None,
+    client_ids: list[str] | None = None,
 ) -> pd.DataFrame:
     """
-    Time-series outreach data for the selected district, program, and date range.
-    When program='both', returns columns [period, program, metric_value]
-    so the trend chart can draw one line per program.
+    Time-series outreach data across the given districts, program, date range,
+    and clients.  Pass None/[] to include all.
+    When program='both', returns columns [period, program, metric_value].
     When a single program is selected, returns [period, metric_value].
     """
-    date_filter = (
+    date_filter     = (
         f"AND activity_week BETWEEN '{start_date}' AND '{end_date}'"
         if start_date and end_date else ""
     )
+    district_filter = _in_filter("district_id", district_ids)
+    client_filter   = _in_filter("nation", client_ids)
     if program == "both":
         sql_str = f"""
             SELECT period, program, SUM(contacts + events) AS metric_value
             FROM   your_catalog.your_schema.outreach_activity
-            WHERE  district_id = '{district_id}'
-              AND  program IN ('BP', 'CLP')
+            WHERE  program IN ('BP', 'CLP')
+            {district_filter}
             {date_filter}
+            {client_filter}
             GROUP  BY period, program
             ORDER  BY period, program
         """
@@ -292,31 +370,39 @@ def get_district_trend(
         sql_str = f"""
             SELECT period, SUM(contacts + events) AS metric_value
             FROM   your_catalog.your_schema.outreach_activity
-            WHERE  district_id = '{district_id}'
-              AND  program = '{program}'
+            WHERE  program = '{program}'
+            {district_filter}
             {date_filter}
+            {client_filter}
             GROUP  BY period
             ORDER  BY period
         """
     return _cached(
-        key=f"trend:{district_id}:{program}:{start_date}:{end_date}",
+        key=f"trend:{_list_key(district_ids)}:{program}:{start_date}:{end_date}:{_list_key(client_ids)}",
         fn=functools.partial(run_query, sql_str),
     )
 
 
-def get_district_table(district_id: str) -> pd.DataFrame:
+def get_district_table(
+    district_ids: list[str] | None = None,
+    client_ids: list[str] | None = None,
+) -> pd.DataFrame:
     """
-    Detail rows for the selected district (drives the data table).
-    Returns any columns you want displayed.
+    Detail rows across the given districts and clients.
+    Pass None/[] for either to include all.
     """
+    district_filter = _in_filter("district_id", district_ids)
+    client_filter   = _in_filter("nation", client_ids)
     sql_str = f"""
         SELECT *
         FROM   your_catalog.your_schema.district_detail
-        WHERE  district_id = '{district_id}'
+        WHERE  1=1
+        {district_filter}
+        {client_filter}
         ORDER  BY sort_key
         LIMIT  500
     """
     return _cached(
-        key=f"table:{district_id}",
+        key=f"table:{_list_key(district_ids)}:{_list_key(client_ids)}",
         fn=functools.partial(run_query, sql_str),
     )

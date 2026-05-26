@@ -15,15 +15,17 @@ import dash
 import dash_bootstrap_components as dbc
 import pandas as pd
 import plotly.graph_objects as go
-from dash import Input, Output, callback, dash_table, dcc, html
+from dash import Input, Output, State, callback, dash_table, dcc, html
 
 from data.queries import (
+    get_client_list,
     get_district_demographics,
     get_district_list,
     get_district_table,
     get_district_trend,
     get_program_comparison,
     get_program_totals,
+    get_state_list,
 )
 
 dash.register_page(
@@ -164,22 +166,24 @@ layout = dbc.Container(
         ),
 
         # ── Slicers row ───────────────────────────────────────────────────────
+        # Dependency order: State → Program → Client (needs both); State → District
         dbc.Row(
             [
-                # District
+                # State
                 dbc.Col(
-                    html.Span("District:", className="fw-semibold me-2 align-middle"),
+                    html.Span("State:", className="fw-semibold me-2 align-middle"),
                     width="auto",
                     className="d-flex align-items-center",
                 ),
                 dbc.Col(
                     dcc.Dropdown(
-                        id="district-selector",
+                        id="state-selector",
                         options=[],
-                        placeholder="Select a district…",
-                        clearable=False,
+                        placeholder="Select a state…",
+                        multi=True,
+                        clearable=True,
                         searchable=True,
-                        style={"minWidth": "240px"},
+                        style={"minWidth": "180px"},
                     ),
                     width="auto",
                 ),
@@ -207,6 +211,54 @@ layout = dbc.Container(
                         inputStyle={"display": "none"},
                         labelClassName="btn btn-outline-success btn-sm me-1",
                         labelCheckedClassName="btn btn-success btn-sm me-1",
+                    ),
+                    width="auto",
+                ),
+
+                # Divider
+                dbc.Col(html.Div(className="vr mx-2"), width="auto",
+                        className="d-flex align-items-center"),
+
+                # Client
+                dbc.Col(
+                    html.Span("Client:", className="fw-semibold me-2 align-middle"),
+                    width="auto",
+                    className="d-flex align-items-center",
+                ),
+                dbc.Col(
+                    dcc.Dropdown(
+                        id="client-selector",
+                        options=[],
+                        placeholder="Select a state first…",
+                        multi=True,
+                        clearable=True,
+                        searchable=True,
+                        disabled=True,
+                        style={"minWidth": "220px"},
+                    ),
+                    width="auto",
+                ),
+
+                # Divider
+                dbc.Col(html.Div(className="vr mx-2"), width="auto",
+                        className="d-flex align-items-center"),
+
+                # District
+                dbc.Col(
+                    html.Span("District:", className="fw-semibold me-2 align-middle"),
+                    width="auto",
+                    className="d-flex align-items-center",
+                ),
+                dbc.Col(
+                    dcc.Dropdown(
+                        id="district-selector",
+                        options=[],
+                        placeholder="Select a state first…",
+                        multi=True,
+                        clearable=True,
+                        searchable=True,
+                        disabled=True,
+                        style={"minWidth": "260px"},
                     ),
                     width="auto",
                 ),
@@ -444,21 +496,58 @@ layout = dbc.Container(
 )
 
 
-# ── Populate district dropdown on page load ───────────────────────────────────
+# ── Populate state dropdown on page load ──────────────────────────────────────
+
+@callback(
+    Output("state-selector", "options"),
+    Input("state-selector", "id"),
+)
+def load_state_options(_):
+    try:
+        return get_state_list()
+    except Exception as exc:
+        print(f"[analytics] state list failed: {exc}", flush=True)
+        return []
+
+
+# ── Populate district dropdown when state changes ─────────────────────────────
 
 @callback(
     Output("district-selector", "options"),
     Output("district-selector", "value"),
-    Input("district-selector", "id"),
+    Output("district-selector", "disabled"),
+    Input("state-selector", "value"),
 )
-def load_district_options(_):
+def update_district_options(states: list[str] | None):
+    if not states:
+        return [], None, True
     try:
-        options = get_district_list()
-        default = options[0]["value"] if options else None
-        return options, default
+        options = get_district_list(states)
+        return options, None, False
     except Exception as exc:
         print(f"[analytics] district list failed: {exc}", flush=True)
-        return [], None
+        return [], None, True
+
+
+# ── Populate client dropdown when state or program changes ───────────────────
+
+@callback(
+    Output("client-selector", "options"),
+    Output("client-selector", "value"),
+    Output("client-selector", "disabled"),
+    Output("client-selector", "placeholder"),
+    Input("state-selector",   "value"),
+    Input("program-selector", "value"),
+)
+def update_client_options(states: list[str] | None, program: str):
+    if not states:
+        return [], None, True, "Select a state first…"
+    try:
+        options = get_client_list(states, program)
+        return options, None, False, "All clients"
+    except Exception as exc:
+        print(f"[analytics] client list failed: {exc}", flush=True)
+        return [], None, True, "Select a state first…"
 
 
 # ── Master callback ───────────────────────────────────────────────────────────
@@ -479,57 +568,67 @@ def load_district_options(_):
     Output("detail-table",            "data"),
     Output("analytics-status",        "children"),
     Input("district-selector",        "value"),
+    Input("client-selector",          "value"),
     Input("program-selector",         "value"),
     Input("date-range",               "start_date"),
     Input("date-range",               "end_date"),
     Input("analytics-refresh-btn",    "n_clicks"),
+    State("state-selector",           "value"),
+    State("district-selector",        "options"),
+    State("client-selector",          "options"),
 )
 def update_all(
-    district_id: str | None,
+    district_ids: list[str] | None,
+    client_ids: list[str] | None,
     program: str,
     start_date: str | None,
     end_date: str | None,
     _,
+    state_ids: list[str] | None,
+    district_options: list[dict] | None,
+    client_options: list[dict] | None,
 ):
     from data.queries import bust_cache
 
     if dash.callback_context.triggered_id == "analytics-refresh-btn":
         bust_cache()
 
-    date_label = _fmt_date_range(start_date, end_date)
+    # Resolve effective scope:
+    # explicit selection → use it; no selection but options exist → use all in scope;
+    # no options at all (no state selected) → None = ecosystem wide / no filter.
+    effective_districts = district_ids or [o["value"] for o in (district_options or [])] or None
+    effective_clients   = client_ids   or [o["value"] for o in (client_options   or [])] or None
+
+    date_label     = _fmt_date_range(start_date, end_date)
     contacts_label = f"Total Contacts · {date_label}"
     events_label   = f"Total Events · {date_label}"
 
-    if not district_id:
-        blank = _placeholder_fig("Select a district above")
-        return "—", "—", "—", "—", contacts_label, events_label, blank, blank, [], [], ""
-
     try:
-        demographics = get_district_demographics(district_id)
+        demographics = get_district_demographics(effective_districts)
     except Exception as exc:
         print(f"[analytics] demographics failed: {exc}", flush=True)
         demographics = {}
 
     try:
-        prog_totals = get_program_totals(district_id, program, start_date, end_date)
+        prog_totals = get_program_totals(effective_districts, program, start_date, end_date, effective_clients)
     except Exception as exc:
         print(f"[analytics] program totals failed: {exc}", flush=True)
         prog_totals = {}
 
     try:
-        comparison = get_program_comparison(district_id, start_date, end_date)
+        comparison = get_program_comparison(effective_districts, start_date, end_date, effective_clients)
     except Exception as exc:
         print(f"[analytics] comparison failed: {exc}", flush=True)
         comparison = pd.DataFrame(columns=["program", "contacts", "events"])
 
     try:
-        trend = get_district_trend(district_id, program, start_date, end_date)
+        trend = get_district_trend(effective_districts, program, start_date, end_date, effective_clients)
     except Exception as exc:
         print(f"[analytics] trend failed: {exc}", flush=True)
         trend = pd.DataFrame()
 
     try:
-        detail = get_district_table(district_id)
+        detail = get_district_table(effective_districts, effective_clients)
     except Exception as exc:
         print(f"[analytics] detail table failed: {exc}", flush=True)
         detail = pd.DataFrame()
@@ -620,7 +719,18 @@ def update_all(
         table_data = detail.to_dict("records")
 
     prog_label = program.upper() if program != "both" else "BP + CLP"
-    status = f"District: {district_id} · Program: {prog_label} · {date_label} · {len(detail):,} records"
+
+    state_part    = ", ".join(sorted(state_ids)) if state_ids else "Ecosystem"
+    district_part = (
+        f"{len(district_ids)} district{'s' if len(district_ids) != 1 else ''}" if district_ids
+        else ("all districts" if state_ids else "")
+    )
+    client_part   = (
+        f"{len(client_ids)} client{'s' if len(client_ids) != 1 else ''}" if client_ids
+        else ("all clients" if state_ids else "")
+    )
+    scope  = " · ".join(p for p in [state_part, district_part, client_part] if p)
+    status = f"{scope} · Program: {prog_label} · {date_label} · {len(detail):,} records"
     return (
         registered, unreliable, contacts, events,
         contacts_label, events_label,
@@ -657,21 +767,11 @@ _ELECTION_CELL_IDS = [
     Input("district-selector",     "value"),
     Input("analytics-refresh-btn", "n_clicks"),
 )
-def update_election_section(district_id: str | None, _):
-    blank = ("—",) * len(_ELECTION_CELL_IDS)
-
-    if not district_id:
-        return blank
-
-    # TODO: replace stubs with live election data once queries are ready.
-    # Example:
-    #   stats = get_election_stats(district_id)   # returns dict keyed by yr1/yr2
-    #   return (
-    #       f"{stats['yr1']['overall_turnout']:.1f}%",
-    #       f"{stats['yr2']['overall_turnout']:.1f}%",
-    #       ...
-    #   )
-    return blank
+def update_election_section(*_):
+    # All cells are stubs until election data is wired up.
+    # To add live data: write get_election_stats() in queries.py, call it here
+    # with the district/client scope, and return formatted values instead of "—".
+    return ("—",) * len(_ELECTION_CELL_IDS)
 
 
 # ── Figure helpers ────────────────────────────────────────────────────────────
