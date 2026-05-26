@@ -609,7 +609,12 @@ def update_all(
     events_label   = f"Total Events · {date_label}"
 
     try:
-        demographics = get_district_demographics(effective_districts)
+        if district_ids:
+            demographics = get_district_demographics(district_ids=effective_districts)
+        elif state_ids:
+            demographics = get_district_demographics(state_ids=state_ids)
+        else:
+            demographics = get_district_demographics()
     except Exception as exc:
         print(f"[analytics] demographics failed: {exc}", flush=True)
         demographics = {}

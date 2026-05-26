@@ -244,13 +244,23 @@ def get_district_list(states: list[str]) -> list[dict]:
 # Each function accepts a district_id and returns a DataFrame for one chart.
 # Replace catalog/schema/table references with your actual names.
 
-def get_district_demographics(district_ids: list[str] | None = None) -> dict:
+def get_district_demographics(
+    district_ids: list[str] | None = None,
+    state_ids: list[str] | None = None,
+) -> dict:
     """
-    Voter-file demographics aggregated across the given districts.
-    Pass None or [] for ecosystem-wide totals.
+    Voter-file demographics aggregated across the given scope.
+    Priority: district_ids > state_ids > ecosystem-wide.
+    Filters by state_upper_district when district_ids provided, by
+    registered_address.state when only state_ids provided.
     Returns a dict of {metric_name: value}.
     """
-    scope_filter = _in_filter("state_upper_district", district_ids)
+    if district_ids:
+        scope_filter = _in_filter("state_upper_district", district_ids)
+    elif state_ids:
+        scope_filter = _in_filter("`registered_address.state`", state_ids)
+    else:
+        scope_filter = ""
     sql_str = f"""
         SELECT
             count(external_id) AS registered_voters,
@@ -260,7 +270,7 @@ def get_district_demographics(district_ids: list[str] | None = None) -> dict:
         {scope_filter}
     """
     df = _cached(
-        key=f"demographics:{_list_key(district_ids)}",
+        key=f"demographics:{_list_key(district_ids)}:{_list_key(state_ids)}",
         fn=functools.partial(run_query, sql_str, label="demographics"),
     )
     return df.iloc[0].to_dict() if not df.empty else {}
