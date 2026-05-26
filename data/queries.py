@@ -22,6 +22,7 @@ HOW TO ADD YOUR QUERIES
 from __future__ import annotations
 
 import os
+import sys
 import time
 import threading
 import functools
@@ -49,7 +50,9 @@ def _connect() -> sql.client.Connection:
     )
 
 
-def run_query(sql_str: str) -> pd.DataFrame:
+def run_query(sql_str: str, label: str = "") -> pd.DataFrame:
+    tag = f"[sql:{label}]" if label else "[sql]"
+    print(f"{tag} {' '.join(sql_str.split())}", file=sys.stderr, flush=True)
     with _connect() as conn:
         with conn.cursor() as cur:
             cur.execute(sql_str)
@@ -148,7 +151,7 @@ def get_district_metric(metric: str) -> pd.DataFrame:
 
     return _cached(
         key=f"district_metric:{metric}",
-        fn=functools.partial(run_query, _METRIC_SQL[metric]),
+        fn=functools.partial(run_query, _METRIC_SQL[metric], label=f"heatmap:{metric}"),
     )
 
 
@@ -161,7 +164,7 @@ def get_filter_options(table: str, column: str) -> list[str]:
         FROM   {table}
         ORDER  BY val
     """
-    df = _cached(key=f"filter:{table}:{column}", fn=functools.partial(run_query, sql_str))
+    df = _cached(key=f"filter:{table}:{column}", fn=functools.partial(run_query, sql_str, label=f"filter:{column}"))
     return df["val"].dropna().astype(str).tolist()
 
 
@@ -173,7 +176,7 @@ def get_state_list() -> list[dict]:
         WHERE  `registered_address.state` IS NOT NULL
         ORDER  BY state_abbr
     """
-    df = _cached(key="state_list", fn=functools.partial(run_query, sql_str))
+    df = _cached(key="state_list", fn=functools.partial(run_query, sql_str, label="state_list"))
     return [
         {"label": row["state_abbr"], "value": row["state_abbr"]}
         for _, row in df.iterrows()
@@ -199,7 +202,7 @@ def get_client_list(states: list[str], program: str) -> list[dict]:
     """
     df = _cached(
         key=f"client_list:{_list_key(states)}:{program}",
-        fn=functools.partial(run_query, sql_str),
+        fn=functools.partial(run_query, sql_str, label="client_list"),
     )
     show_group = program == "both"
     return [
@@ -228,7 +231,7 @@ def get_district_list(states: list[str]) -> list[dict]:
     """
     df = _cached(
         key=f"district_list:{_list_key(states)}",
-        fn=functools.partial(run_query, sql_str),
+        fn=functools.partial(run_query, sql_str, label="district_list"),
     )
     return [
         {"label": row["district_id"], "value": row["district_id"]}
@@ -258,7 +261,7 @@ def get_district_demographics(district_ids: list[str] | None = None) -> dict:
     """
     df = _cached(
         key=f"demographics:{_list_key(district_ids)}",
-        fn=functools.partial(run_query, sql_str),
+        fn=functools.partial(run_query, sql_str, label="demographics"),
     )
     return df.iloc[0].to_dict() if not df.empty else {}
 
@@ -295,7 +298,7 @@ def get_program_totals(
     """
     df = _cached(
         key=f"program_totals:{_list_key(district_ids)}:{program}:{start_date}:{end_date}:{_list_key(client_ids)}",
-        fn=functools.partial(run_query, sql_str),
+        fn=functools.partial(run_query, sql_str, label="program_totals"),
     )
     return df.iloc[0].to_dict() if not df.empty else {}
 
@@ -332,7 +335,7 @@ def get_program_comparison(
     """
     return _cached(
         key=f"program_comparison:{_list_key(district_ids)}:{start_date}:{end_date}:{_list_key(client_ids)}",
-        fn=functools.partial(run_query, sql_str),
+        fn=functools.partial(run_query, sql_str, label="program_comparison"),
     )
 
 
@@ -379,7 +382,7 @@ def get_district_trend(
         """
     return _cached(
         key=f"trend:{_list_key(district_ids)}:{program}:{start_date}:{end_date}:{_list_key(client_ids)}",
-        fn=functools.partial(run_query, sql_str),
+        fn=functools.partial(run_query, sql_str, label="district_trend"),
     )
 
 
@@ -404,5 +407,5 @@ def get_district_table(
     """
     return _cached(
         key=f"table:{_list_key(district_ids)}:{_list_key(client_ids)}",
-        fn=functools.partial(run_query, sql_str),
+        fn=functools.partial(run_query, sql_str, label="district_table"),
     )

@@ -589,9 +589,9 @@ def update_all(
     if dash.callback_context.triggered_id == "analytics-refresh-btn":
         bust_cache()
 
-    # Resolve effective scope using cached query functions directly.
-    # Explicit selection takes priority; otherwise fall back to all items in
-    # scope for the selected states; no state → None = no filter (ecosystem wide).
+    # Resolve effective scope. Explicit district selection takes priority;
+    # if only a state is selected, fall back to all districts in that state.
+    # Client filter is only applied when clients are explicitly chosen.
     if district_ids:
         effective_districts = district_ids
     elif state_ids:
@@ -602,15 +602,7 @@ def update_all(
     else:
         effective_districts = None
 
-    if client_ids:
-        effective_clients = client_ids
-    elif state_ids:
-        try:
-            effective_clients = [o["value"] for o in get_client_list(state_ids, program)] or None
-        except Exception:
-            effective_clients = None
-    else:
-        effective_clients = None
+    effective_clients = client_ids if client_ids else None
 
     date_label     = _fmt_date_range(start_date, end_date)
     contacts_label = f"Total Contacts · {date_label}"
