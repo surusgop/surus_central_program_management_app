@@ -256,7 +256,10 @@ def get_district_demographics(
     Returns a dict of {metric_name: value}.
     """
     if district_ids:
-        scope_filter = _in_filter("state_upper_district", district_ids)
+        scope_filter = (
+            _in_filter("state_upper_district", district_ids)
+            + _in_filter("`registered_address.state`", state_ids)
+        )
     elif state_ids:
         scope_filter = _in_filter("`registered_address.state`", state_ids)
     else:
@@ -270,7 +273,7 @@ def get_district_demographics(
         {scope_filter}
     """
     df = _cached(
-        key=f"demographics:{_list_key(district_ids)}:{_list_key(state_ids)}",
+        key=f"demographics:d={_list_key(district_ids)}:s={_list_key(state_ids)}",
         fn=functools.partial(run_query, sql_str, label="demographics"),
     )
     return df.iloc[0].to_dict() if not df.empty else {}
