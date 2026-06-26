@@ -1,0 +1,30 @@
+<!-- @dsCard group="Components" -->
+<!DOCTYPE html><html><head><meta charset="utf-8">
+<link rel="stylesheet" href="../themes/surus-illinois.css">
+<style>
+  html,body{margin:0}
+  body{background:#fff;padding:18px 20px;font-family:var(--il-font);color:var(--il-navy)}
+  .lbl{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--il-slate);font-weight:700;margin-bottom:12px}
+  .mono{font-family:monospace;font-size:11px;color:var(--il-slate);display:block;margin-top:10px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  thead tr{background:var(--il-red)}
+  th{padding:9px 12px;font-weight:700;color:#fff;text-transform:uppercase;letter-spacing:.03em;font-size:11px}
+  td{padding:8px 12px;border-bottom:1px solid var(--il-border);color:var(--il-navy)}
+  tbody tr:nth-child(even){background:var(--il-gray-band)}
+  .r{text-align:right;font-variant-numeric:tabular-nums}
+  .st{font-weight:800}
+</style></head>
+<body>
+<div class="lbl">Data grid · Illinois style</div>
+<div style="border:1px solid var(--il-border);border-radius:4px;overflow:hidden;box-shadow:var(--il-shadow)">
+  <table>
+    <thead><tr><th>State</th><th>Group</th><th>Nation</th><th>Week</th><th class="r">Total</th><th class="r">Phone</th></tr></thead>
+    <tbody>
+      <tr><td class="st">Arizona</td><td>BP</td><td>Navajo Nation</td><td>1/6/25</td><td class="r">4,210</td><td class="r">1,180</td></tr>
+      <tr><td class="st">Oklahoma</td><td>CLP</td><td>Cherokee Nation</td><td>1/6/25</td><td class="r">3,902</td><td class="r">—</td></tr>
+      <tr><td class="st">New Mexico</td><td>BP</td><td>Pueblo</td><td>1/13/25</td><td class="r">2,015</td><td class="r">640</td></tr>
+    </tbody>
+  </table>
+</div>
+<span class="mono">Red header bar, zebra rows on #EEF0F3, bold State column.</span>
+</body></html>

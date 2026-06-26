@@ -1,0 +1,47 @@
+/* =============================================================================
+   Surus Illinois — Marketing-site Brand
+   -----------------------------------------------------------------------------
+   The public "Surus Illinois" website ("Join the Battle Program"). A light,
+   high-energy red-and-white campaign look: bold red bands, heavy dark-navy sans
+   headings, slate-gray nav, light-gray section strips. Colors sampled from the
+   live site. This is a THIRD brand surface alongside the dark Surus Intelligence
+   app and is used here to render the dashboard components for visual comparison.
+
+   Headings use a heavy grotesque (Open Sans 800 as the closest reliable match).
+   ========================================================================== */
+@import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700;800&display=swap');
+
+:root {
+  /* ── Core ──────────────────────────────────────────────────────────────── */
+  --il-red:        #C1272D; /* brand red — bands, buttons, logo, active links  */
+  --il-red-dark:   #A11F24; /* hover / pressed                                 */
+  --il-navy:       #2A313C; /* headings + dark body text                       */
+  --il-slate:      #75859E; /* nav links, muted/secondary text                 */
+  --il-white:      #FFFFFF;
+  --il-gray-band:  #EEF0F3; /* breadcrumb strip / light section background     */
+  --il-border:     #E1E5EA; /* hairline dividers                              */
+
+  /* Social accents (share row) */
+  --il-fb:         #3B5998;
+  --il-tw:         #1DA1F2;
+
+  /* ── Type ──────────────────────────────────────────────────────────────── */
+  --il-font: "Open Sans", -apple-system, BlinkMacSystemFont, "Segoe UI",
+             Helvetica, Arial, sans-serif;
+
+  --il-display:   2.5rem;    /* 40px — hero band title, extrabold               */
+  --il-h-lead:    2rem;      /* 32px — heavy lead paragraph/statement           */
+  --il-nav:       0.9375rem; /* 15px — uppercase nav, letter-spaced             */
+  --il-body:      1rem;      /* 16px                                            */
+  --il-small:     0.8125rem; /* 13px                                           */
+
+  --il-fw-extra:  800; /* display headings                                     */
+  --il-fw-bold:   700;
+  --il-fw-semi:   600; /* nav, labels                                          */
+
+  --il-tracking-nav: 0.04em;
+
+  /* ── Geometry ──────────────────────────────────────────────────────────── */
+  --il-radius:    4px;  /* buttons / cards — squarer than the SI app           */
+  --il-shadow:    0 1px 3px rgba(42,49,60,.12);
+}

@@ -1,0 +1,94 @@
+﻿/* =============================================================================
+   Surus Central Program Management — re-skinned to the Surus Illinois marketing brand.
+   Layered over Bootswatch Flatly: keeps Bootstrap's grid/spacing utilities and
+   repaints every surface to the Illinois light look — white/gray field, bold red
+   chrome, heavy navy Open-Sans headings, slate secondary text.
+   ========================================================================== */
+@import url('../../themes/surus-illinois.css');
+
+body {
+  background: #F4F6F8 !important;
+  color: var(--il-navy);
+  font-family: var(--il-font);
+}
+
+/* ── Navbar → bold red bar, white heavy wordmark, white nav ───────────────── */
+.navbar.bg-primary {
+  background: var(--il-red) !important;
+  box-shadow: var(--il-shadow) !important;
+}
+.navbar-brand {
+  font-family: var(--il-font);
+  color: #fff !important;
+  font-weight: 800;
+  letter-spacing: .02em;
+  text-transform: uppercase;
+}
+.navbar .nav-link { color: rgba(255,255,255,.82) !important; font-weight: 600; }
+.navbar .nav-link:hover { color: #fff !important; }
+.navbar .nav-link.active {
+  color: #fff !important;
+  font-weight: 700;
+  box-shadow: inset 0 -3px 0 rgba(255,255,255,.9);
+}
+.navbar .text-white-50 { color: rgba(255,255,255,.78) !important; }
+.navbar .btn-outline-light { color:#fff; border-color: rgba(255,255,255,.65); }
+.navbar .btn-outline-light:hover { background: rgba(255,255,255,.16); border-color:#fff; }
+
+/* ── Heavy navy headings ──────────────────────────────────────────────────── */
+.brand-title {
+  font-family: var(--il-font) !important;
+  color: var(--il-navy) !important;
+  font-weight: 800 !important;
+  letter-spacing: -.01em;
+}
+
+/* ── Cards → white, hairline border, subtle shadow, 4px ───────────────────── */
+.card {
+  background: #fff !important;
+  border: 1px solid var(--il-border) !important;
+  border-radius: var(--il-radius) !important;
+  color: var(--il-navy);
+  box-shadow: var(--il-shadow) !important;
+}
+.card-header, .card-header.bg-white {
+  background: #fff !important;
+  border-bottom: 2px solid var(--il-red) !important;
+  color: var(--il-navy) !important;
+  font-weight: 800;
+  letter-spacing: .03em;
+  text-transform: uppercase;
+  font-size: 13px;
+}
+
+/* ── Buttons → solid red ──────────────────────────────────────────────────── */
+.btn-primary {
+  background: var(--il-red);
+  border-color: var(--il-red);
+  color: #fff;
+  font-weight: 700;
+}
+.btn-primary:hover, .btn-primary:focus, .btn-primary:active {
+  background: var(--il-red-dark) !important;
+  border-color: var(--il-red-dark) !important;
+  color: #fff !important;
+}
+
+/* ── Text utilities remapped ──────────────────────────────────────────────── */
+.text-primary { color: var(--il-red) !important; }
+.text-muted   { color: var(--il-slate) !important; }
+
+/* ── Form controls → light ────────────────────────────────────────────────── */
+.form-control, .form-select {
+  background: #fff;
+  border: 1px solid var(--il-border);
+  color: var(--il-navy);
+}
+.form-control:focus, .form-select:focus {
+  background: #fff;
+  border-color: var(--il-red);
+  color: var(--il-navy);
+  box-shadow: 0 0 0 .15rem rgba(193,39,45,.18);
+}
+.form-control::placeholder { color: var(--il-slate); }
+label { color: var(--il-navy); font-weight: 700; }

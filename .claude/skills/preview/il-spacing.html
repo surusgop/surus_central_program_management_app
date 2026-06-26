@@ -1,0 +1,25 @@
+<!-- @dsCard group="Spacing" -->
+<!DOCTYPE html><html><head><meta charset="utf-8">
+<link rel="stylesheet" href="../themes/surus-illinois.css">
+<style>
+  html,body{margin:0}
+  body{background:#fff;padding:18px 22px;font-family:var(--il-font);color:var(--il-navy)}
+  .lbl{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--il-slate);font-weight:700;margin-bottom:12px}
+  .mono{font-family:monospace;font-size:11px;color:var(--il-slate)}
+  .blk{background:var(--il-red)}
+</style></head>
+<body>
+<div class="lbl">Spacing, radius &amp; elevation</div>
+<div style="display:flex;align-items:flex-end;gap:16px;margin-bottom:18px">
+  <div style="text-align:center"><div class="blk" style="width:4px;height:4px"></div><span class="mono">4</span></div>
+  <div style="text-align:center"><div class="blk" style="width:8px;height:8px"></div><span class="mono">8</span></div>
+  <div style="text-align:center"><div class="blk" style="width:16px;height:16px"></div><span class="mono">16</span></div>
+  <div style="text-align:center"><div class="blk" style="width:24px;height:24px"></div><span class="mono">24</span></div>
+  <div style="text-align:center"><div class="blk" style="width:48px;height:48px"></div><span class="mono">48</span></div>
+</div>
+<div style="display:flex;gap:24px;align-items:center">
+  <div style="text-align:center"><div style="width:120px;height:54px;background:#fff;border:1px solid var(--il-border);border-radius:4px"></div><span class="mono">radius 4px</span></div>
+  <div style="text-align:center"><div style="width:120px;height:54px;background:#fff;border:1px solid var(--il-border);border-radius:4px;box-shadow:0 1px 3px rgba(42,49,60,.12)"></div><span class="mono">card shadow</span></div>
+  <div style="text-align:center"><div style="width:120px;height:54px;background:#fff;border:1px solid var(--il-border);border-top:3px solid var(--il-red);border-radius:4px"></div><span class="mono">red top-rule</span></div>
+</div>
+</body></html>

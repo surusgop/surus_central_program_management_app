@@ -8,15 +8,6 @@ Required env vars:
 
 Optional:
   QUERY_CACHE_SECONDS      How long to cache query results (default: 300)
-
-─────────────────────────────────────────────────────────────────────────────
-HOW TO ADD YOUR QUERIES
-  1. Replace the placeholder catalog/schema/table references below.
-  2. The district_id column must match the `id` field in your GeoJSON features
-     (see geojson/README.md).
-  3. Add new metric keys to HEATMAP_VARIABLES and write their SQL in
-     _METRIC_SQL. That's all — the map page discovers them automatically.
-─────────────────────────────────────────────────────────────────────────────
 """
 
 from __future__ import annotations
@@ -25,7 +16,7 @@ import os
 import sys
 import time
 import threading
-import functools
+import traceback
 from typing import Any
 
 import pandas as pd
@@ -52,14 +43,23 @@ def _connect() -> sql.client.Connection:
 
 def run_query(sql_str: str, label: str = "") -> pd.DataFrame:
     tag = f"[sql:{label}]" if label else "[sql]"
-    print(f"{tag} {' '.join(sql_str.split())}", file=sys.stderr, flush=True)
-    with _connect() as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql_str)
-            return cur.fetchall_arrow().to_pandas()
+    print(f"{tag} executing query", file=sys.stderr, flush=True)
+    t0 = time.monotonic()
+    try:
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql_str)
+                df = cur.fetchall_arrow().to_pandas()
+        elapsed = time.monotonic() - t0
+        print(f"{tag} OK — {len(df)} rows in {elapsed:.2f}s", file=sys.stderr, flush=True)
+        return df
+    except Exception:
+        elapsed = time.monotonic() - t0
+        print(f"{tag} FAILED after {elapsed:.2f}s:\n{traceback.format_exc()}", file=sys.stderr, flush=True)
+        raise
 
 
-# ── Simple TTL cache (no extra dependencies) ──────────────────────────────────
+# ── Simple TTL cache ──────────────────────────────────────────────────────────
 
 _cache: dict[str, tuple[float, Any]] = {}
 _cache_lock = threading.Lock()
@@ -69,7 +69,10 @@ def _cached(key: str, fn, ttl: int = _CACHE_TTL):
     with _cache_lock:
         entry = _cache.get(key)
         if entry and (time.monotonic() - entry[0]) < ttl:
+            age = time.monotonic() - entry[0]
+            print(f"[cache HIT] {key!r} (age {age:.0f}s)", file=sys.stderr, flush=True)
             return entry[1]
+    print(f"[cache MISS] {key!r}", file=sys.stderr, flush=True)
     result = fn()
     with _cache_lock:
         _cache[key] = (time.monotonic(), result)
@@ -82,343 +85,283 @@ def bust_cache():
 
 
 def _list_key(values: list[str] | None) -> str:
-    """Deterministic cache-key fragment for a list of strings."""
     return "|".join(sorted(str(v) for v in values)) if values else ""
 
 
 def _in_filter(column: str, values: list[str] | None) -> str:
-    """Build an 'AND column IN (...)' clause, or '' when values is empty."""
     if not values:
         return ""
     escaped = ", ".join(f"'{v}'" for v in values)
     return f"AND {column} IN ({escaped})"
 
 
-# ── Heatmap variable registry ─────────────────────────────────────────────────
-#
-# Add / remove entries here to control what appears in the variable slicer.
-# key   → used as the button value and column alias in SQL
-# label → display text on the button
-
-HEATMAP_VARIABLES: dict[str, str] = {
-    "total_population":  "Population",
-    "median_income":     "Median Income",
-    "voter_turnout_pct": "Voter Turnout %",
-    "registered_voters": "Registered Voters",
-    # "your_metric": "Your Label",
-}
-
-# ── Per-metric SQL ────────────────────────────────────────────────────────────
-#
-# Each key must match a key in HEATMAP_VARIABLES.
-# The query must return exactly two columns: district_id and metric_value.
-# Replace catalog / schema / table references with your actual names.
-
-_METRIC_SQL: dict[str, str] = {
-    "total_population": """
-        SELECT district_id, SUM(population) AS metric_value
-        FROM   your_catalog.your_schema.district_demographics
-        GROUP  BY district_id
-    """,
-    "median_income": """
-        SELECT district_id, MEDIAN(household_income) AS metric_value
-        FROM   your_catalog.your_schema.district_demographics
-        GROUP  BY district_id
-    """,
-    "voter_turnout_pct": """
-        SELECT district_id,
-               ROUND(100.0 * SUM(votes_cast) / NULLIF(SUM(eligible_voters), 0), 1) AS metric_value
-        FROM   your_catalog.your_schema.election_results
-        GROUP  BY district_id
-    """,
-    "registered_voters": """
-        SELECT district_id, SUM(registered_voters) AS metric_value
-        FROM   your_catalog.your_schema.voter_rolls
-        GROUP  BY district_id
-    """,
-}
-
-
-def get_district_metric(metric: str) -> pd.DataFrame:
-    """
-    Return a DataFrame with columns [district_id, metric_value] for the
-    requested metric. Results are cached for QUERY_CACHE_SECONDS seconds.
-
-    Raises KeyError if metric is not in HEATMAP_VARIABLES.
-    """
-    if metric not in _METRIC_SQL:
-        raise KeyError(f"Unknown metric '{metric}'. Add it to _METRIC_SQL in data/queries.py.")
-
-    return _cached(
-        key=f"district_metric:{metric}",
-        fn=functools.partial(run_query, _METRIC_SQL[metric], label=f"heatmap:{metric}"),
-    )
-
-
 # ── Filter / slicer data ──────────────────────────────────────────────────────
 
-def get_filter_options(table: str, column: str) -> list[str]:
-    """Generic helper: distinct values for a column, alphabetically sorted."""
-    sql_str = f"""
-        SELECT DISTINCT {column} AS val
-        FROM   {table}
-        ORDER  BY val
-    """
-    df = _cached(key=f"filter:{table}:{column}", fn=functools.partial(run_query, sql_str, label=f"filter:{column}"))
-    return df["val"].dropna().astype(str).tolist()
+_TABLE            = "universal.bitables.contact_analysis_dash"
+_RAW_TABLE        = os.environ.get("DATABRICKS_CONTACTS_TABLE", "universal.bitables.contact_pull_trimmed")
+_BOUNDARIES_TABLE = "geo_assets.boundaries.cb_2025_500k"
+
+# 2-letter abbreviation → full name used in the boundary table's state_name column
+_STATE_ABBR_TO_NAME = {
+    "AL": "Alabama", "AK": "Alaska", "AZ": "Arizona", "AR": "Arkansas",
+    "CA": "California", "CO": "Colorado", "CT": "Connecticut", "DE": "Delaware",
+    "FL": "Florida", "GA": "Georgia", "HI": "Hawaii", "ID": "Idaho",
+    "IL": "Illinois", "IN": "Indiana", "IA": "Iowa", "KS": "Kansas",
+    "KY": "Kentucky", "LA": "Louisiana", "ME": "Maine", "MD": "Maryland",
+    "MA": "Massachusetts", "MI": "Michigan", "MN": "Minnesota", "MS": "Mississippi",
+    "MO": "Missouri", "MT": "Montana", "NE": "Nebraska", "NV": "Nevada",
+    "NH": "New Hampshire", "NJ": "New Jersey", "NM": "New Mexico", "NY": "New York",
+    "NC": "North Carolina", "ND": "North Dakota", "OH": "Ohio", "OK": "Oklahoma",
+    "OR": "Oregon", "PA": "Pennsylvania", "RI": "Rhode Island", "SC": "South Carolina",
+    "SD": "South Dakota", "TN": "Tennessee", "TX": "Texas", "UT": "Utah",
+    "VT": "Vermont", "VA": "Virginia", "WA": "Washington", "WV": "West Virginia",
+    "WI": "Wisconsin", "WY": "Wyoming",
+}
 
 
 def get_state_list() -> list[dict]:
-    """Return [{label: "IL", value: "IL"}, ...] for the state dropdown."""
-    sql_str = """
-        SELECT DISTINCT `registered_address.state` AS state_abbr
-        FROM   universal.deltatables.vcs_gold
-        WHERE  `registered_address.state` IS NOT NULL
-        ORDER  BY state_abbr
-    """
-    df = _cached(key="state_list", fn=functools.partial(run_query, sql_str, label="state_list"))
-    return [
-        {"label": row["state_abbr"], "value": row["state_abbr"]}
-        for _, row in df.iterrows()
-    ]
-
-
-def get_client_list(states: list[str], program: str) -> list[dict]:
-    """
-    Return [{label: "nation-slug", value: "nation-slug"}, ...] for the client
-    dropdown, filtered to the selected states and program.
-    When program='both', labels include the program in parentheses.
-    """
-    if not states:
-        return []
-    prog_filter   = "`group` IN ('CLP', 'BP')" if program == "both" else f"`group` = '{program}'"
-    state_filter  = _in_filter("state", states)
-    sql_str = f"""
-        SELECT DISTINCT nation, `group`
-        FROM   universal.prod.signups
-        WHERE  {prog_filter}
-        {state_filter}
-        ORDER  BY nation
-    """
-    df = _cached(
-        key=f"client_list:{_list_key(states)}:{program}",
-        fn=functools.partial(run_query, sql_str, label="client_list"),
-    )
-    show_group = program == "both"
-    return [
-        {
-            "label": f"{row['nation']} ({row['group']})" if show_group else row["nation"],
-            "value": row["nation"],
-        }
-        for _, row in df.iterrows()
-    ]
-
-
-def get_district_list(states: list[str]) -> list[dict]:
-    """
-    Return [{label: "District Name", value: "district_id"}, ...] for the
-    district dropdown, filtered to the selected states.
-    """
-    if not states:
-        return []
-    state_filter = _in_filter("`registered_address.state`", states)
-    sql_str = f"""
-        SELECT DISTINCT state_upper_district AS district_id
-        FROM   universal.deltatables.vcs_gold
-        WHERE  1=1
-        {state_filter}
-        ORDER  BY district_id
-    """
-    df = _cached(
-        key=f"district_list:{_list_key(states)}",
-        fn=functools.partial(run_query, sql_str, label="district_list"),
-    )
-    return [
-        {"label": str(row["district_id"]), "value": str(row["district_id"])}
-        for _, row in df.iterrows()
-    ]
-
-
-# ── Per-district detail queries ───────────────────────────────────────────────
-#
-# Each function accepts a district_id and returns a DataFrame for one chart.
-# Replace catalog/schema/table references with your actual names.
-
-def get_district_demographics(
-    district_ids: list[str] | None = None,
-    state_ids: list[str] | None = None,
-) -> dict:
-    """
-    Voter-file demographics aggregated across the given scope.
-    Priority: district_ids > state_ids > ecosystem-wide.
-    Filters by state_upper_district when district_ids provided, by
-    registered_address.state when only state_ids provided.
-    Returns a dict of {metric_name: value}.
-    """
-    if district_ids:
-        scope_filter = (
-            _in_filter("state_upper_district", district_ids)
-            + _in_filter("`registered_address.state`", state_ids)
+    """Return [{label, value}] for the state dropdown."""
+    def _fetch():
+        df = run_query(
+            f"SELECT DISTINCT state FROM {_TABLE} ORDER BY state",
+            label="state_list",
         )
-    elif state_ids:
-        scope_filter = _in_filter("`registered_address.state`", state_ids)
-    else:
-        scope_filter = ""
-    sql_str = f"""
-        SELECT
-            count(external_id) AS registered_voters,
-            sum(case when `custom_fields.surus_voter_segmentation` = 'Republican Turnout' then 1 else 0 end) AS unreliable_conservatives
-        FROM   universal.deltatables.vcs_gold
-        WHERE  1=1
-        {scope_filter}
-    """
-    df = _cached(
-        key=f"demographics:d={_list_key(district_ids)}:s={_list_key(state_ids)}",
-        fn=functools.partial(run_query, sql_str, label="demographics"),
-    )
-    return df.iloc[0].to_dict() if not df.empty else {}
+        df = df.rename(columns={"state": "label"})
+        df["value"] = df["label"]
+        return df.to_dict("records")
+    return _cached("state_list", _fetch)
 
 
-def get_program_totals(
-    district_ids: list[str] | None,
-    program: str,
-    start_date: str | None = None,
-    end_date: str | None = None,
-    client_ids: list[str] | None = None,
-) -> dict:
-    """
-    Aggregate contacts and events across the given districts and clients.
-    Pass None/[] for either to include all.  program='both' for combined totals.
-    Returns a dict with keys total_contacts, total_events.
-    """
-    prog_filter     = f"AND program = '{program}'" if program != "both" else ""
-    date_filter     = (
-        f"AND activity_week BETWEEN '{start_date}' AND '{end_date}'"
-        if start_date and end_date else ""
-    )
-    district_filter = _in_filter("district_id", district_ids)
-    client_filter   = _in_filter("nation", client_ids)
-    sql_str = f"""
-        SELECT
-            SUM(contacts) AS total_contacts,
-            SUM(events)   AS total_events
-        FROM   your_catalog.your_schema.outreach_activity
-        WHERE  1=1
-        {district_filter}
-        {prog_filter}
-        {date_filter}
-        {client_filter}
-    """
-    df = _cached(
-        key=f"program_totals:{_list_key(district_ids)}:{program}:{start_date}:{end_date}:{_list_key(client_ids)}",
-        fn=functools.partial(run_query, sql_str, label="program_totals"),
-    )
-    return df.iloc[0].to_dict() if not df.empty else {}
+def get_nation_list() -> list[dict]:
+    """Return [{label, value}] for the nation dropdown."""
+    def _fetch():
+        df = run_query(
+            f"SELECT DISTINCT nation FROM {_TABLE} ORDER BY nation",
+            label="nation_list",
+        )
+        df = df.rename(columns={"nation": "label"})
+        df["value"] = df["label"]
+        return df.to_dict("records")
+    return _cached("nation_list", _fetch)
 
 
-def get_program_comparison(
-    district_ids: list[str] | None,
-    start_date: str | None = None,
-    end_date: str | None = None,
-    client_ids: list[str] | None = None,
+def get_group_list() -> list[dict]:
+    """Return [{label, value}] for the group dropdown."""
+    def _fetch():
+        df = run_query(
+            f"SELECT DISTINCT `group` FROM {_TABLE} ORDER BY `group`",
+            label="group_list",
+        )
+        df = df.rename(columns={"group": "label"})
+        df["value"] = df["label"]
+        return df.to_dict("records")
+    return _cached("group_list", _fetch)
+
+
+def get_nation_list_filtered(
+    state_ids: list[str],
+    group_ids: list[str],
+) -> list[dict]:
+    """Return [{label, value}] for nation dropdown filtered by selected states and groups."""
+    if not state_ids and not group_ids:
+        return get_nation_list()
+
+    state_filter = _in_filter("state",   state_ids)
+    group_filter = _in_filter("`group`", group_ids)
+
+    def _fetch():
+        df = run_query(
+            f"SELECT DISTINCT nation FROM {_TABLE} WHERE 1=1 {state_filter} {group_filter} ORDER BY nation",
+            label="nation_list_filtered",
+        )
+        df = df.rename(columns={"nation": "label"})
+        df["value"] = df["label"]
+        return df.to_dict("records")
+
+    key = f"nation_list_filtered|{_list_key(state_ids)}|{_list_key(group_ids)}"
+    return _cached(key, _fetch)
+
+
+# ── Contact summary ───────────────────────────────────────────────────────────
+
+def get_contact_summary(
+    state_ids: list[str],
+    nation_ids: list[str],
+    group_ids: list[str],
 ) -> pd.DataFrame:
     """
-    Contacts and events broken down by program (BP, CLP) across the given
-    districts and clients.  Pass None/[] to include all.
-    Returns columns [program, contacts, events].
+    Returns rows from the pre-aggregated contact analysis table filtered by the
+    provided state, nation, and group values. Empty lists mean no filter.
+
+    Columns: state, group, nation, week_start, total_contacts, unique_contacts,
+             contact_door_knock, contact_email, contact_phone, contact_text,
+             contact_snail_mail, contact_face_to_face, contact_other, total_events,
+             contacted_1_time, contacted_2_times, contacted_3_times, contacted_4plus_times
     """
-    date_filter     = (
-        f"AND activity_week BETWEEN '{start_date}' AND '{end_date}'"
-        if start_date and end_date else ""
-    )
-    district_filter = _in_filter("district_id", district_ids)
-    client_filter   = _in_filter("nation", client_ids)
+    state_filter  = _in_filter("state",   state_ids)
+    nation_filter = _in_filter("nation",  nation_ids)
+    group_filter  = _in_filter("`group`", group_ids)
+
     sql_str = f"""
         SELECT
-            program,
-            SUM(contacts) AS contacts,
-            SUM(events)   AS events
-        FROM   your_catalog.your_schema.outreach_activity
-        WHERE  program IN ('BP', 'CLP')
-        {district_filter}
-        {date_filter}
-        {client_filter}
-        GROUP  BY program
-        ORDER  BY program
+            state,
+            `group`,
+            nation,
+            week_start,
+            total_contacts,
+            unique_contacts,
+            contact_door_knock,
+            contact_email,
+            contact_phone,
+            contact_text,
+            contact_snail_mail,
+            contact_face_to_face,
+            contact_other,
+            total_events,
+            contacted_1_time,
+            contacted_2_times,
+            contacted_3_times,
+            contacted_4plus_times,
+            count_unreliable_conservatives,
+            uc_total_contacts,
+            uc_unique_contacts,
+            fe_contacts
+        FROM {_TABLE}
+        WHERE 1=1
+        {group_filter}
+        {state_filter}
+        {nation_filter}
+        ORDER BY week_start
     """
-    return _cached(
-        key=f"program_comparison:{_list_key(district_ids)}:{start_date}:{end_date}:{_list_key(client_ids)}",
-        fn=functools.partial(run_query, sql_str, label="program_comparison"),
-    )
+
+    key = f"contact_summary|{_list_key(state_ids)}|{_list_key(nation_ids)}|{_list_key(group_ids)}"
+    return _cached(key, lambda: run_query(sql_str, label="contact_summary"))
 
 
-def get_district_trend(
-    district_ids: list[str] | None,
-    program: str = "both",
-    start_date: str | None = None,
-    end_date: str | None = None,
-    client_ids: list[str] | None = None,
+def get_raw_contact_counts(
+    state_ids: list[str],
+    nation_ids: list[str],
+    group_ids: list[str],
+    start_date: str | None,
+    end_date: str | None,
 ) -> pd.DataFrame:
     """
-    Time-series outreach data across the given districts, program, date range,
-    and clients.  Pass None/[] to include all.
-    When program='both', returns columns [period, program, metric_value].
-    When a single program is selected, returns [period, metric_value].
-    """
-    date_filter     = (
-        f"AND activity_week BETWEEN '{start_date}' AND '{end_date}'"
-        if start_date and end_date else ""
-    )
-    district_filter = _in_filter("district_id", district_ids)
-    client_filter   = _in_filter("nation", client_ids)
-    if program == "both":
-        sql_str = f"""
-            SELECT period, program, SUM(contacts + events) AS metric_value
-            FROM   your_catalog.your_schema.outreach_activity
-            WHERE  program IN ('BP', 'CLP')
-            {district_filter}
-            {date_filter}
-            {client_filter}
-            GROUP  BY period, program
-            ORDER  BY period, program
-        """
-    else:
-        sql_str = f"""
-            SELECT period, SUM(contacts + events) AS metric_value
-            FROM   your_catalog.your_schema.outreach_activity
-            WHERE  program = '{program}'
-            {district_filter}
-            {date_filter}
-            {client_filter}
-            GROUP  BY period
-            ORDER  BY period
-        """
-    return _cached(
-        key=f"trend:{_list_key(district_ids)}:{program}:{start_date}:{end_date}:{_list_key(client_ids)}",
-        fn=functools.partial(run_query, sql_str, label="district_trend"),
-    )
+    Returns true unique and total contact counts from the raw contact table,
+    properly de-duplicated across the full date range.  UC figures are computed
+    via conditional aggregation so both sets come from a single query pass.
 
+    Columns: state, group, nation,
+             unique_contacts, total_contacts,
+             uc_unique_contacts, uc_total_contacts
+    """
+    state_filter      = _in_filter("state",   state_ids)
+    nation_filter     = _in_filter("nation",  nation_ids)
+    group_filter      = _in_filter("`group`", group_ids)
+    date_start_filter = f"AND LEFT(created_at, 10) >= '{start_date[:10]}'" if start_date else ""
+    date_end_filter   = f"AND LEFT(created_at, 10) <= '{end_date[:10]}'"   if end_date   else ""
 
-def get_district_table(
-    district_ids: list[str] | None = None,
-    client_ids: list[str] | None = None,
-) -> pd.DataFrame:
-    """
-    Detail rows across the given districts and clients.
-    Pass None/[] for either to include all.
-    """
-    district_filter = _in_filter("district_id", district_ids)
-    client_filter   = _in_filter("nation", client_ids)
     sql_str = f"""
-        SELECT *
-        FROM   your_catalog.your_schema.district_detail
-        WHERE  1=1
-        {district_filter}
-        {client_filter}
-        ORDER  BY sort_key
-        LIMIT  500
+        SELECT
+            state,
+            `group`,
+            nation,
+            COUNT(DISTINCT uuid_contactee) AS unique_contacts,
+            COUNT(*)                        AS total_contacts,
+            COUNT(DISTINCT CASE WHEN `custom_fields.surus_voter_segmentation` = 'Unreliable Conservative'
+                                THEN uuid_contactee END) AS uc_unique_contacts,
+            COUNT(CASE WHEN `custom_fields.surus_voter_segmentation` = 'Unreliable Conservative'
+                       THEN 1 END)                       AS uc_total_contacts
+        FROM {_RAW_TABLE}
+        WHERE 1=1
+          {state_filter}
+          {nation_filter}
+          {group_filter}
+          {date_start_filter}
+          {date_end_filter}
+        GROUP BY state, `group`, nation
     """
-    return _cached(
-        key=f"table:{_list_key(district_ids)}:{_list_key(client_ids)}",
-        fn=functools.partial(run_query, sql_str, label="district_table"),
+
+    key = (
+        f"raw_contact_counts|{_list_key(state_ids)}|{_list_key(nation_ids)}"
+        f"|{_list_key(group_ids)}|{start_date or ''}|{end_date or ''}"
     )
+    return _cached(key, lambda: run_query(sql_str, label="raw_contact_counts"))
+
+
+# ── Voter map data ─────────────────────────────────────────────────────────────
+
+def get_voter_map_data(
+    state_ids: list[str],
+    nation_ids: list[str],
+    group_ids: list[str],
+    start_date: str | None,
+    end_date: str | None,
+) -> pd.DataFrame:
+    """
+    Returns one row per voter with coordinates and total contact count in the
+    given date window. Empty lists / None values mean no filter applied.
+
+    Columns: uuid_contactee, lat, lng, contact_count
+    """
+    state_filter  = _in_filter("state",   state_ids)
+    nation_filter = _in_filter("nation",  nation_ids)
+    group_filter  = _in_filter("`group`", group_ids)
+    # created_at is a string (ISO 8601); compare using the first 10 chars (YYYY-MM-DD)
+    date_start_filter = f"AND LEFT(created_at, 10) >= '{start_date}'" if start_date else ""
+    date_end_filter   = f"AND LEFT(created_at, 10) <= '{end_date}'"   if end_date   else ""
+
+    sql_str = f"""
+        SELECT
+            uuid_contactee,
+            state,
+            CAST(`registered_address.lat` AS DOUBLE) AS lat,
+            CAST(`registered_address.lng` AS DOUBLE) AS lng,
+            COUNT(*)                                  AS contact_count
+        FROM {_RAW_TABLE}
+        WHERE 1=1
+          AND `registered_address.lat` IS NOT NULL AND `registered_address.lat` != ''
+          AND `registered_address.lng` IS NOT NULL AND `registered_address.lng` != ''
+          {state_filter}
+          {nation_filter}
+          {group_filter}
+          {date_start_filter}
+          {date_end_filter}
+        GROUP BY
+            uuid_contactee,
+            state,
+            `registered_address.lat`,
+            `registered_address.lng`
+    """
+
+    key = (
+        f"voter_map|{_list_key(state_ids)}|{_list_key(nation_ids)}"
+        f"|{_list_key(group_ids)}|{start_date or ''}|{end_date or ''}"
+    )
+    return _cached(key, lambda: run_query(sql_str, label="voter_map"))
+
+
+# ── Boundaries ────────────────────────────────────────────────────────────────
+
+def get_boundaries(layer: str, state_ids: list[str]) -> pd.DataFrame:
+    """
+    Returns boundary rows for the given layer and states (2-letter abbreviations).
+    If state_ids is empty, returns all features for that layer.
+
+    Columns: geoid, name, state_name, geometry_geojson
+    """
+    state_names = [_STATE_ABBR_TO_NAME[s] for s in (state_ids or []) if s in _STATE_ABBR_TO_NAME]
+    name_filter = _in_filter("state_name", state_names)
+
+    sql_str = f"""
+        SELECT
+            geoid,
+            name,
+            state_name,
+            geometry_geojson
+        FROM {_BOUNDARIES_TABLE}
+        WHERE layer = '{layer}'
+        {name_filter}
+    """
+
+    key = f"boundaries|{layer}|{_list_key(state_names)}"
+    return _cached(key, lambda: run_query(sql_str, label=f"boundaries_{layer}"), ttl=3600)

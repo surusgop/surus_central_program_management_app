@@ -1,18 +1,23 @@
-import os
-import dash
-import dash_bootstrap_components as dbc
+﻿import os
+from pathlib import Path
 from dotenv import load_dotenv
 
-from auth import register_auth
+load_dotenv(Path(__file__).parent / ".env")
 
-load_dotenv()
+import dash
+import dash_bootstrap_components as dbc
+from auth import register_auth
 
 app = dash.Dash(
     __name__,
     use_pages=True,
-    external_stylesheets=[dbc.themes.FLATLY, dbc.icons.BOOTSTRAP],
+    external_stylesheets=[
+        dbc.themes.FLATLY,
+        dbc.icons.BOOTSTRAP,
+        "https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700;800&display=swap",
+    ],
     suppress_callback_exceptions=True,
-    title="Surus Central",
+    title="Surus Central Program Management",
 )
 server = app.server  # expose Flask server for gunicorn
 register_auth(server)
