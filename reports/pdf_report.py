@@ -166,7 +166,7 @@ def build_report(
 
     today = date.today()
     story = [
-        Paragraph("Surus Central Program Management", _S["title"]),
+        Paragraph("Central Program Management", _S["title"]),
         Paragraph("Contact Summary Report",    _S["subtitle"]),
         Paragraph(f"Filters: {filter_context}", _S["meta"]),
         Paragraph(f"Generated: {_fmt_date(today)}", _S["meta"]),

@@ -18,14 +18,14 @@ import dash_bootstrap_components as dbc
 import plotly.graph_objects as go
 from dash import Input, Output, State, callback, ctx, dcc, html
 
-from data.queries import get_contact_summary, get_group_list, get_nation_list_filtered, get_state_list, get_raw_contact_counts
+from data.queries import get_contact_summary, get_fd_list, get_fd_source, get_group_list, get_nation_list_filtered, get_state_list, get_raw_contact_counts
 from reports.pdf_report import build_report
 
 dash.register_page(
     __name__,
     path="/analytics",
     name="Overview",
-    title="Overview | Surus Central Program Management",
+    title="Overview | Central Program Management",
 )
 
 # ── Contact type fields ───────────────────────────────────────────────────────
@@ -179,7 +179,6 @@ layout = dbc.Container(
                             placeholder="All field directors…",
                             multi=True,
                             clearable=True,
-                            disabled=True,
                         ),
                     ],
                     xs=12, sm=6, lg=3, className="mb-3",
@@ -216,6 +215,7 @@ layout = dbc.Container(
                         dcc.Dropdown(
                             id="group-selector",
                             options=[],
+                            value=["CLP"],
                             placeholder="All groups…",
                             multi=True,
                             clearable=True,
@@ -249,53 +249,6 @@ layout = dbc.Container(
                 _kpi_card("kpi-connector-count", "bi bi-diagram-3-fill",      "# of Connectors"),
             ],
             className="mb-4",
-        ),
-
-        # ── Pie charts ────────────────────────────────────────────────────────
-        dbc.Row(
-            [
-                dbc.Col(
-                    dbc.Card(
-                        [
-                            dbc.CardHeader("Contact Type Breakdown", className="fw-semibold"),
-                            dbc.CardBody(
-                                dcc.Loading(
-                                    dcc.Graph(
-                                        id="contact-type-pie",
-                                        config={"displayModeBar": False},
-                                    ),
-                                    target_components={"contact-type-pie": "figure"},
-                                    type="circle",
-                                    color="#C1272D",
-                                )
-                            ),
-                        ],
-                        className="h-100",
-                    ),
-                    xs=12, lg=6, className="mb-4",
-                ),
-                dbc.Col(
-                    dbc.Card(
-                        [
-                            dbc.CardHeader("Contacts by Frequency", className="fw-semibold"),
-                            dbc.CardBody(
-                                dcc.Loading(
-                                    dcc.Graph(
-                                        id="contact-frequency-pie",
-                                        config={"displayModeBar": False},
-                                    ),
-                                    target_components={"contact-frequency-pie": "figure"},
-                                    type="circle",
-                                    color="#C1272D",
-                                )
-                            ),
-                        ],
-                        className="h-100",
-                    ),
-                    xs=12, lg=6, className="mb-4",
-                ),
-            ],
-            className="align-items-stretch",
         ),
 
         # ── Summary grid ──────────────────────────────────────────────────────
@@ -358,30 +311,38 @@ layout = dbc.Container(
 # ── Load filter options on page mount ─────────────────────────────────────────
 
 @callback(
-    Output("state-selector", "options"),
-    Output("group-selector", "options"),
-    Input("analytics-init",  "n_intervals"),
+    Output("state-selector",          "options"),
+    Output("group-selector",          "options"),
+    Output("field-director-selector", "options"),
+    Input("analytics-init",           "n_intervals"),
 )
 def load_filter_options(_):
     print("[contacts] load_filter_options fired", file=sys.stderr, flush=True)
     try:
         states = get_state_list()
         groups = get_group_list()
-        print(f"[contacts] load_filter_options → {len(states)} states, {len(groups)} groups", file=sys.stderr, flush=True)
-        return states, groups
+        fds    = get_fd_list()
+        print(f"[contacts] load_filter_options → {len(states)} states, {len(groups)} groups, {len(fds)} FDs", file=sys.stderr, flush=True)
+        return states, groups, fds
     except Exception:
         print(f"[contacts] load_filter_options FAILED:\n{traceback.format_exc()}", file=sys.stderr, flush=True)
-        return [], []
+        return [], [], []
 
 
 @callback(
-    Output("nation-selector", "options"),
-    Input("state-selector",   "value"),
-    Input("group-selector",   "value"),
+    Output("nation-selector",         "options"),
+    Input("state-selector",           "value"),
+    Input("group-selector",           "value"),
+    Input("field-director-selector",  "value"),
 )
-def update_nation_options(states, groups):
+def update_nation_options(states, groups, fd_ids):
     try:
-        return get_nation_list_filtered(states or [], groups or [])
+        options = get_nation_list_filtered(states or [], groups or [])
+        if fd_ids:
+            fd_df = get_fd_source()
+            fd_nations = set(fd_df[fd_df["fd"].isin(fd_ids)]["slug"].tolist())
+            options = [o for o in options if o["value"] in fd_nations]
+        return options
     except Exception:
         print(f"[contacts] update_nation_options FAILED:\n{traceback.format_exc()}", file=sys.stderr, flush=True)
         return []
@@ -393,33 +354,40 @@ def update_nation_options(states, groups):
     Output("kpi-total-contacts",        "children"),
     Output("kpi-total-events",          "children"),
     Output("kpi-connector-count",       "children"),
-    Output("contact-type-pie",          "figure"),
-    Output("contact-frequency-pie",     "figure"),
     Output("analytics-summary-grid",    "rowData"),
     Output("contacts-status",           "children"),
     Output("kpi-total-contacts-delta",  "children"),
     Output("kpi-total-events-delta",    "children"),
     Output("kpi-connector-count-delta", "children"),
-    Input("state-selector",  "value"),
-    Input("nation-selector", "value"),
-    Input("group-selector",  "value"),
-    Input("date-range",      "start_date"),
-    Input("date-range",      "end_date"),
+    Input("field-director-selector", "value"),
+    Input("state-selector",          "value"),
+    Input("nation-selector",         "value"),
+    Input("group-selector",          "value"),
+    Input("date-range",              "start_date"),
+    Input("date-range",              "end_date"),
 )
-def update_summary(states, nations, groups, start_date, end_date):
+def update_summary(fd_ids, states, nations, groups, start_date, end_date):
     triggered = ctx.triggered_id or "initial"
     print(
         f"[contacts] update_summary triggered_by={triggered!r} "
-        f"states={states!r} nations={nations!r} groups={groups!r} "
+        f"fd_ids={fd_ids!r} states={states!r} nations={nations!r} groups={groups!r} "
         f"start={start_date!r} end={end_date!r}",
         file=sys.stderr, flush=True,
     )
 
     try:
+        # Resolve effective nations — when FDs are selected, derive nations from FD source
+        fd_df = get_fd_source()
+        if fd_ids:
+            fd_nations = fd_df[fd_df["fd"].isin(fd_ids)]["slug"].tolist()
+            effective_nations = list(set(nations) & set(fd_nations)) if nations else fd_nations
+        else:
+            effective_nations = nations or []
+
         df_all = get_contact_summary(
-            state_ids=states  or [],
-            nation_ids=nations or [],
-            group_ids=groups  or [],
+            state_ids=states or [],
+            nation_ids=effective_nations,
+            group_ids=groups or [],
         )
 
         # Apply date filter in Python (full dataset already cached per state/nation/group)
@@ -433,9 +401,9 @@ def update_summary(states, nations, groups, start_date, end_date):
 
         # Total contact counts come from the raw table (truly de-duplicated across the date range)
         raw_df = get_raw_contact_counts(
-            state_ids=states  or [],
-            nation_ids=nations or [],
-            group_ids=groups  or [],
+            state_ids=states or [],
+            nation_ids=effective_nations,
+            group_ids=groups or [],
             start_date=start_date,
             end_date=end_date,
         )
@@ -451,9 +419,9 @@ def update_summary(states, nations, groups, start_date, end_date):
             prior_total_events = int(df_prior["total_events"].sum()) if not df_prior.empty else 0
 
             raw_prior = get_raw_contact_counts(
-                state_ids=states  or [],
-                nation_ids=nations or [],
-                group_ids=groups  or [],
+                state_ids=states or [],
+                nation_ids=effective_nations,
+                group_ids=groups or [],
                 start_date=prior_start,
                 end_date=prior_end,
             )
@@ -463,9 +431,6 @@ def update_summary(states, nations, groups, start_date, end_date):
             d_total_events   = _delta_span(total_events,   prior_total_events,   prior_label)
         else:
             d_total_contacts = d_total_events = ""
-
-        fig_type = _build_pie(df, CONTACT_TYPES, "No contact data for this selection.")
-        fig_freq = _build_pie(df, CONTACT_FREQUENCY, "No frequency data for this selection.")
 
         # Build summary grid — aggregate by state/group/nation
         if not df.empty:
@@ -482,6 +447,13 @@ def update_summary(states, nations, groups, start_date, end_date):
             else:
                 grid_df = grid_agg
                 grid_df["total_contacts"] = 0
+            # Join the latest FD assignment per nation
+            if not fd_df.empty:
+                fd_lookup = fd_df[["slug", "fd"]].rename(columns={"slug": "nation", "fd": "field_director"})
+                grid_df = grid_df.merge(fd_lookup, on="nation", how="left")
+                grid_df["field_director"] = grid_df["field_director"].fillna("")
+            else:
+                grid_df["field_director"] = ""
             grid_rows = grid_df.to_dict("records")
         else:
             grid_rows = []
@@ -492,13 +464,12 @@ def update_summary(states, nations, groups, start_date, end_date):
     except Exception:
         print(f"[contacts] update_summary FAILED:\n{traceback.format_exc()}", file=sys.stderr, flush=True)
         total_contacts = total_events = 0
-        fig_type = go.Figure()
-        fig_freq = go.Figure()
         grid_rows = []
         row_count = 0
         d_total_contacts = d_total_events = ""
 
     parts = [
+        ", ".join(sorted(fd_ids))  if fd_ids  else "All field directors",
         ", ".join(sorted(states))  if states  else "All states",
         ", ".join(sorted(nations)) if nations else "All nations",
         ", ".join(sorted(groups))  if groups  else "All groups",
@@ -511,8 +482,6 @@ def update_summary(states, nations, groups, start_date, end_date):
         f"{total_contacts:,}",
         f"{total_events:,}",
         "—",
-        fig_type,
-        fig_freq,
         grid_rows,
         " · ".join(parts),
         d_total_contacts,

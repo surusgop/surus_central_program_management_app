@@ -18,7 +18,7 @@ dash.register_page(
     __name__,
     path="/contacts",
     name="Contacts Detail",
-    title="Contacts Detail | Surus Central Program Management",
+    title="Contacts Detail | Central Program Management",
 )
 
 # ── Column definitions ────────────────────────────────────────────────────────

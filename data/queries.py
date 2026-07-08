@@ -99,6 +99,7 @@ def _in_filter(column: str, values: list[str] | None) -> str:
 
 _TABLE            = "universal.bitables.contact_analysis_dash"
 _RAW_TABLE        = os.environ.get("DATABRICKS_CONTACTS_TABLE", "universal.bitables.contact_pull_trimmed")
+_FD_TABLE         = "universal.bitables.FD_source"
 _BOUNDARIES_TABLE = "geo_assets.boundaries.cb_2025_500k"
 
 # 2-letter abbreviation → full name used in the boundary table's state_name column
@@ -180,6 +181,40 @@ def get_nation_list_filtered(
 
     key = f"nation_list_filtered|{_list_key(state_ids)}|{_list_key(group_ids)}"
     return _cached(key, _fetch)
+
+
+def get_fd_list() -> list[dict]:
+    """Return [{label, value}] for the Field Director dropdown."""
+    def _fetch():
+        df = run_query(
+            f"SELECT DISTINCT fd FROM {_FD_TABLE} WHERE fd IS NOT NULL AND fd != '' ORDER BY fd",
+            label="fd_list",
+        )
+        df = df.rename(columns={"fd": "label"})
+        df["value"] = df["label"]
+        return df.to_dict("records")
+    return _cached("fd_list", _fetch)
+
+
+def get_fd_source() -> pd.DataFrame:
+    """Return the latest Field Director assignment per nation (slug).
+
+    Columns: slug, fd
+    """
+    def _fetch():
+        return run_query(
+            f"""
+            SELECT slug, fd FROM (
+                SELECT slug, fd,
+                       ROW_NUMBER() OVER (PARTITION BY slug ORDER BY date_recorded DESC NULLS LAST) AS rn
+                FROM {_FD_TABLE}
+                WHERE slug IS NOT NULL AND slug != ''
+                  AND fd   IS NOT NULL AND fd   != ''
+            ) WHERE rn = 1
+            """,
+            label="fd_source",
+        )
+    return _cached("fd_source", _fetch)
 
 
 # ── Contact summary ───────────────────────────────────────────────────────────

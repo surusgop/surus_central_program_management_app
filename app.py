@@ -17,7 +17,7 @@ app = dash.Dash(
         "https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700;800&display=swap",
     ],
     suppress_callback_exceptions=True,
-    title="Surus Central Program Management",
+    title="Central Program Management",
 )
 server = app.server  # expose Flask server for gunicorn
 register_auth(server)

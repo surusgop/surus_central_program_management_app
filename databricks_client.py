@@ -1,5 +1,5 @@
 """
-Databricks access template for Surus web apps.
+Databricks access template for web apps.
 
 Drop this file into any new Python web app that needs to:
   - Run PySpark queries against a Databricks cluster
