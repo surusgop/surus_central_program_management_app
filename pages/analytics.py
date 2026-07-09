@@ -18,7 +18,7 @@ import dash_bootstrap_components as dbc
 import plotly.graph_objects as go
 from dash import Input, Output, State, callback, ctx, dcc, html
 
-from data.queries import get_contact_summary, get_fd_list, get_fd_source, get_group_list, get_nation_list_filtered, get_state_list, get_raw_contact_counts
+from data.queries import get_contact_method_counts, get_contact_summary, get_fd_list, get_fd_source, get_goal_constants, get_group_list, get_nation_list_filtered, get_state_list, get_raw_contact_counts
 from reports.pdf_report import build_report
 
 dash.register_page(
@@ -88,6 +88,45 @@ def _delta_span(current: int, prior: int, label: str):
     return html.Span(f"{arrow} {sign}{d:,} ({pct_str}) {label}", className=cls)
 
 
+def _goal_span(actual: int, target: int):
+    """Return an html.Span showing progress toward an annual goal, or "" if no target."""
+    if not target:
+        return ""
+    pct = actual / target * 100
+    if actual >= target:
+        return html.Span(f"✓ Goal met — {actual:,} / {target:,} ({pct:.0f}%)", className="text-success")
+    return html.Span(f"{actual:,} / {target:,} to goal ({pct:.0f}%)", className="text-muted")
+
+
+def _progress_row(label: str, actual: int, target: int):
+    """Return a labeled dbc.Progress bar with an actual/target status line beneath it."""
+    pct = (actual / target * 100) if target else 0
+    met = bool(target) and actual >= target
+    return html.Div(
+        [
+            html.P(label, className="small fw-semibold mb-1"),
+            dbc.Progress(
+                value=min(pct, 100),
+                color="success" if met else "#C1272D",
+                style={"height": "10px"},
+                className="mb-1",
+            ),
+            _goal_span(actual, target) if target else html.Span("No goal set", className="text-muted"),
+        ],
+        className="mb-3",
+    )
+
+
+def _latest_snapshot_sum(df, cols: list[str]) -> dict[str, int]:
+    """Sum point-in-time snapshot columns using each (state, group, nation)'s own
+    latest week, not a single global-latest week — a global cutoff drops any group
+    whose latest row falls on an earlier date and silently zeroes it out."""
+    if df.empty:
+        return {c: 0 for c in cols}
+    latest = df.sort_values("week_start").groupby(["state", "group", "nation"])[cols].last()
+    return {c: int(latest[c].sum()) for c in cols}
+
+
 def _build_pie(data, series_def, empty_msg):
     labels, values = [], []
     for label, field in series_def:
@@ -127,15 +166,18 @@ def _build_pie(data, series_def, empty_msg):
 
 # ── Layout ────────────────────────────────────────────────────────────────────
 
-def _kpi_card(card_id: str, icon_class: str, label: str):
+def _kpi_card(card_id: str, icon_class: str, label: str, has_goal: bool = False):
+    body = [
+        html.I(className=f"{icon_class} fs-2 mb-2", style={"color": "#C1272D"}),
+        html.H2("—", id=card_id, className="fw-bold mb-1"),
+        html.P(label, className="text-muted small mb-0"),
+        html.P(id=f"{card_id}-delta", className="small mb-0 mt-1", style={"minHeight": "1.2em"}),
+    ]
+    if has_goal:
+        body.append(html.P(id=f"{card_id}-goal", className="small mb-0 mt-1", style={"minHeight": "1.2em"}))
     return dbc.Col(
         dbc.Card(
-            dbc.CardBody([
-                html.I(className=f"{icon_class} fs-2 mb-2", style={"color": "#C1272D"}),
-                html.H2("—", id=card_id, className="fw-bold mb-1"),
-                html.P(label, className="text-muted small mb-0"),
-                html.P(id=f"{card_id}-delta", className="small mb-0 mt-1", style={"minHeight": "1.2em"}),
-            ], className="text-center py-4"),
+            dbc.CardBody(body, className="text-center py-4"),
             className="h-100 border-0 kpi-card",
         ),
         xs=12, md=4, className="mb-3",
@@ -244,11 +286,32 @@ layout = dbc.Container(
         # ── KPI cards ─────────────────────────────────────────────────────────
         dbc.Row(
             [
-                _kpi_card("kpi-total-contacts",  "bi bi-journal-check",       "Total Contacts"),
-                _kpi_card("kpi-total-events",    "bi bi-calendar-event-fill", "Total Events"),
-                _kpi_card("kpi-connector-count", "bi bi-diagram-3-fill",      "# of Connectors"),
+                _kpi_card("kpi-total-contacts",  "bi bi-journal-check",       "Total Contacts",  has_goal=True),
+                _kpi_card("kpi-total-events",    "bi bi-calendar-event-fill", "Total Events",    has_goal=True),
+                _kpi_card("kpi-connector-count", "bi bi-diagram-3-fill",      "# of Connectors", has_goal=True),
             ],
             className="mb-4",
+        ),
+
+        # ── Contact goal progress ────────────────────────────────────────────
+        dbc.Row(
+            dbc.Col(
+                dbc.Card(
+                    [
+                        dbc.CardHeader("Contact Goal Progress", className="fw-semibold"),
+                        dbc.CardBody(
+                            dcc.Loading(
+                                html.Div(id="contact-goal-progress"),
+                                target_components={"contact-goal-progress": "children"},
+                                type="circle",
+                                color="#C1272D",
+                            )
+                        ),
+                    ],
+                    className="h-100",
+                ),
+                xs=12, lg=6, className="mb-4",
+            ),
         ),
 
         # ── Summary grid ──────────────────────────────────────────────────────
@@ -268,6 +331,7 @@ layout = dbc.Container(
                                         {"headerName": "Field Director", "field": "field_director", "width": 160, "valueFormatter": {"function": "params.value == null ? '—' : params.value"}},
                                         {"headerName": "Total Contacts", "field": "total_contacts", "valueFormatter": {"function": "params.value == null ? '—' : params.value.toLocaleString()"}, "type": "numericColumn", "flex": 1, "minWidth": 140},
                                         {"headerName": "Total Events",   "field": "total_events",   "valueFormatter": {"function": "params.value == null ? '—' : params.value.toLocaleString()"}, "type": "numericColumn", "flex": 1, "minWidth": 130},
+                                        {"headerName": "# of Connectors", "field": "connector_count", "valueFormatter": {"function": "params.value == null ? '—' : params.value.toLocaleString()"}, "type": "numericColumn", "flex": 1, "minWidth": 150},
                                     ],
                                     rowData=[],
                                     defaultColDef={"resizable": True, "sortable": True, "minWidth": 100},
@@ -359,6 +423,10 @@ def update_nation_options(states, groups, fd_ids):
     Output("kpi-total-contacts-delta",  "children"),
     Output("kpi-total-events-delta",    "children"),
     Output("kpi-connector-count-delta", "children"),
+    Output("kpi-total-contacts-goal",   "children"),
+    Output("kpi-total-events-goal",     "children"),
+    Output("kpi-connector-count-goal",  "children"),
+    Output("contact-goal-progress",     "children"),
     Input("field-director-selector", "value"),
     Input("state-selector",          "value"),
     Input("nation-selector",         "value"),
@@ -454,9 +522,74 @@ def update_summary(fd_ids, states, nations, groups, start_date, end_date):
                 grid_df["field_director"] = grid_df["field_director"].fillna("")
             else:
                 grid_df["field_director"] = ""
+            # Placeholder until connector_count lands in contact_analysis_dash
+            grid_df["connector_count"] = None
             grid_rows = grid_df.to_dict("records")
         else:
             grid_rows = []
+
+        # ── Annual goal comparison (always full year-to-date, ignores date-range filter) ──
+        goals = get_goal_constants()
+        ytd_start = date(date.today().year, 1, 1)
+        ytd_end = date.today()
+
+        df_ytd = df_all[df_all["week_start"].astype(str) >= str(ytd_start)]
+        df_ytd = df_ytd[df_ytd["week_start"].astype(str) <= str(ytd_end)]
+
+        nation_count_ytd = df_ytd["nation"].nunique() if not df_ytd.empty else 0
+        total_events_ytd = int(df_ytd["total_events"].sum()) if not df_ytd.empty else 0
+
+        ytd_latest_sums = _latest_snapshot_sum(df_ytd, ["count_unreliable_conservatives", "count_reg_voters"])
+        count_reg_voters_ytd = ytd_latest_sums["count_reg_voters"]
+        uc_count_ytd         = ytd_latest_sums["count_unreliable_conservatives"]
+
+        raw_ytd = get_raw_contact_counts(
+            state_ids=states or [],
+            nation_ids=effective_nations,
+            group_ids=groups or [],
+            start_date=str(ytd_start),
+            end_date=str(ytd_end),
+        )
+        total_contacts_ytd = int(raw_ytd["total_contacts"].sum()) if not raw_ytd.empty else 0
+
+        g_total_events    = _goal_span(total_events_ytd,   goals.get("t_events", 0)   * nation_count_ytd)
+        g_total_contacts  = _goal_span(total_contacts_ytd, goals.get("t_contacts", 0) * count_reg_voters_ytd)
+
+        # # of Connectors isn't wired up to a real data source yet — placeholder actual of 0
+        connectors_per_goal = goals.get("connectors", 0)
+        connector_target = int(round(uc_count_ytd / connectors_per_goal)) if connectors_per_goal else 0
+        g_connector_count = _goal_span(0, connector_target)
+
+        # Contact goal progress bars — granular actuals from the raw contact table,
+        # filtered to the currently selected date range
+        method_df = get_contact_method_counts(
+            state_ids=states or [],
+            nation_ids=effective_nations,
+            group_ids=groups or [],
+            start_date=start_date,
+            end_date=end_date,
+        )
+        p2p_text_actual = int(method_df["p2p_text"].sum())     if not method_df.empty else 0
+        phone_actual    = int(method_df["phone_call"].sum())   if not method_df.empty else 0
+        f2f_actual      = int(method_df["face_to_face"].sum()) if not method_df.empty else 0
+
+        # Target # of connectors for these two bars must track the currently filtered
+        # UC count (not the YTD-only count used for the # of Connectors KPI goal)
+        filtered_latest_sums = _latest_snapshot_sum(df, ["count_unreliable_conservatives"])
+        count_unreliable_conservatives = filtered_latest_sums["count_unreliable_conservatives"]
+        connector_target_filtered = (
+            int(round(count_unreliable_conservatives / connectors_per_goal)) if connectors_per_goal else 0
+        )
+
+        p2p_text_target = goals.get("p2p_text", 0) * count_unreliable_conservatives
+        phone_target    = goals.get("phone", 0)    * connector_target_filtered
+        f2f_target      = goals.get("f2f", 0)      * connector_target_filtered
+
+        contact_goal_progress = [
+            _progress_row("P2P / Text",   p2p_text_actual, p2p_text_target),
+            _progress_row("Phone Call",   phone_actual,    phone_target),
+            _progress_row("Face to Face", f2f_actual,      f2f_target),
+        ]
 
         row_count = len(df)
         print(f"[contacts] update_summary → {row_count} rows", file=sys.stderr, flush=True)
@@ -467,6 +600,8 @@ def update_summary(fd_ids, states, nations, groups, start_date, end_date):
         grid_rows = []
         row_count = 0
         d_total_contacts = d_total_events = ""
+        g_total_events = g_total_contacts = g_connector_count = ""
+        contact_goal_progress = []
 
     parts = [
         ", ".join(sorted(fd_ids))  if fd_ids  else "All field directors",
@@ -487,6 +622,10 @@ def update_summary(fd_ids, states, nations, groups, start_date, end_date):
         d_total_contacts,
         d_total_events,
         "",
+        g_total_contacts,
+        g_total_events,
+        g_connector_count,
+        contact_goal_progress,
     )
 
 

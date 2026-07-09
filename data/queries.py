@@ -260,7 +260,8 @@ def get_contact_summary(
             count_unreliable_conservatives,
             uc_total_contacts,
             uc_unique_contacts,
-            fe_contacts
+            fe_contacts,
+            count_reg_voters
         FROM {_TABLE}
         WHERE 1=1
         {group_filter}
@@ -271,6 +272,50 @@ def get_contact_summary(
 
     key = f"contact_summary|{_list_key(state_ids)}|{_list_key(nation_ids)}|{_list_key(group_ids)}"
     return _cached(key, lambda: run_query(sql_str, label="contact_summary"))
+
+
+def get_contact_method_counts(
+    state_ids: list[str],
+    nation_ids: list[str],
+    group_ids: list[str],
+    start_date: str | None,
+    end_date: str | None,
+) -> pd.DataFrame:
+    """
+    Returns granular contact-method counts from the raw contact table
+    (contact_method values e.g. '1-1_text', 'phone_call', 'face_to_face').
+
+    Columns: state, group, nation, p2p_text, phone_call, face_to_face
+    """
+    state_filter      = _in_filter("state",   state_ids)
+    nation_filter     = _in_filter("nation",  nation_ids)
+    group_filter      = _in_filter("`group`", group_ids)
+    date_start_filter = f"AND LEFT(created_at, 10) >= '{start_date[:10]}'" if start_date else ""
+    date_end_filter   = f"AND LEFT(created_at, 10) <= '{end_date[:10]}'"   if end_date   else ""
+
+    sql_str = f"""
+        SELECT
+            state,
+            `group`,
+            nation,
+            COUNT(CASE WHEN contact_method = '1-1_text'    THEN 1 END) AS p2p_text,
+            COUNT(CASE WHEN contact_method = 'phone_call'   THEN 1 END) AS phone_call,
+            COUNT(CASE WHEN contact_method = 'face_to_face' THEN 1 END) AS face_to_face
+        FROM {_RAW_TABLE}
+        WHERE 1=1
+          {state_filter}
+          {nation_filter}
+          {group_filter}
+          {date_start_filter}
+          {date_end_filter}
+        GROUP BY state, `group`, nation
+    """
+
+    key = (
+        f"contact_method_counts|{_list_key(state_ids)}|{_list_key(nation_ids)}"
+        f"|{_list_key(group_ids)}|{start_date or ''}|{end_date or ''}"
+    )
+    return _cached(key, lambda: run_query(sql_str, label="contact_method_counts"))
 
 
 def get_raw_contact_counts(
@@ -373,6 +418,28 @@ def get_voter_map_data(
         f"|{_list_key(group_ids)}|{start_date or ''}|{end_date or ''}"
     )
     return _cached(key, lambda: run_query(sql_str, label="voter_map"))
+
+
+# ── Program goals ─────────────────────────────────────────────────────────────
+
+_GOALS_TABLE = "universal.bitables.clp_goals_source"
+
+
+def get_goal_constants() -> dict[str, int]:
+    """Return {KPI: Value} using the latest date_recorded row per KPI."""
+    def _fetch():
+        df = run_query(
+            f"""
+                SELECT KPI, Value FROM (
+                    SELECT KPI, Value,
+                           ROW_NUMBER() OVER (PARTITION BY KPI ORDER BY date_recorded DESC) AS rn
+                    FROM {_GOALS_TABLE}
+                ) WHERE rn = 1
+            """,
+            label="goal_constants",
+        )
+        return dict(zip(df["KPI"], df["Value"]))
+    return _cached("goal_constants", _fetch, ttl=3600)
 
 
 # ── Boundaries ────────────────────────────────────────────────────────────────
