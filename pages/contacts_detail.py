@@ -12,7 +12,7 @@ import dash_ag_grid as dag
 import dash_bootstrap_components as dbc
 from dash import Input, Output, callback, ctx, dcc, html
 
-from data.queries import get_contact_summary, get_group_list, get_nation_list_filtered, get_state_list
+from data.queries import get_contact_summary, get_fd_list_filtered, get_org_list_filtered, get_group_list, get_nation_list_filtered, get_state_list, display_group
 
 dash.register_page(
     __name__,
@@ -89,7 +89,7 @@ layout = dbc.Container(
                             searchable=True,
                         ),
                     ],
-                    xs=12, sm=6, lg=4, className="mb-3",
+                    xs=12, sm=6, lg=2, className="mb-3",
                 ),
                 dbc.Col(
                     [
@@ -104,7 +104,7 @@ layout = dbc.Container(
                             searchable=True,
                         ),
                     ],
-                    xs=12, sm=6, lg=4, className="mb-3",
+                    xs=12, sm=6, lg=2, className="mb-3",
                 ),
                 dbc.Col(
                     [
@@ -119,7 +119,37 @@ layout = dbc.Container(
                             searchable=True,
                         ),
                     ],
-                    xs=12, sm=6, lg=4, className="mb-3",
+                    xs=12, sm=6, lg=2, className="mb-3",
+                ),
+                dbc.Col(
+                    [
+                        dbc.Label("Field Director", html_for="cd-fd-selector",
+                                  className="fw-semibold small mb-1"),
+                        dcc.Dropdown(
+                            id="cd-fd-selector",
+                            options=[],
+                            placeholder="All FDs…",
+                            multi=True,
+                            clearable=True,
+                            searchable=True,
+                        ),
+                    ],
+                    xs=12, sm=6, lg=2, className="mb-3",
+                ),
+                dbc.Col(
+                    [
+                        dbc.Label("Org", html_for="cd-org-selector",
+                                  className="fw-semibold small mb-1"),
+                        dcc.Dropdown(
+                            id="cd-org-selector",
+                            options=[],
+                            placeholder="All orgs…",
+                            multi=True,
+                            clearable=True,
+                            searchable=True,
+                        ),
+                    ],
+                    xs=12, sm=6, lg=2, className="mb-3",
                 ),
             ],
             className="mb-2 align-items-end",
@@ -196,12 +226,44 @@ def load_filter_options(_):
     Output("cd-nation-selector", "options"),
     Input("cd-state-selector",   "value"),
     Input("cd-group-selector",   "value"),
+    Input("cd-fd-selector",      "value"),
+    Input("cd-org-selector",     "value"),
 )
-def update_nation_options(states, groups):
+def update_nation_options(states, groups, fds, orgs):
     try:
-        return get_nation_list_filtered(states or [], groups or [])
+        return get_nation_list_filtered(states or [], groups or [], fds or [], orgs or [])
     except Exception:
         print(f"[contacts-detail] update_nation_options FAILED:\n{traceback.format_exc()}", file=sys.stderr, flush=True)
+        return []
+
+
+@callback(
+    Output("cd-fd-selector",    "options"),
+    Input("cd-state-selector",  "value"),
+    Input("cd-group-selector",  "value"),
+    Input("cd-nation-selector", "value"),
+    Input("cd-org-selector",    "value"),
+)
+def update_fd_options(states, groups, nations, orgs):
+    try:
+        return get_fd_list_filtered(states or [], nations or [], groups or [], orgs or [])
+    except Exception:
+        print(f"[contacts-detail] update_fd_options FAILED:\n{traceback.format_exc()}", file=sys.stderr, flush=True)
+        return []
+
+
+@callback(
+    Output("cd-org-selector",  "options"),
+    Input("cd-state-selector", "value"),
+    Input("cd-group-selector", "value"),
+    Input("cd-nation-selector", "value"),
+    Input("cd-fd-selector",     "value"),
+)
+def update_org_options(states, groups, nations, fds):
+    try:
+        return get_org_list_filtered(states or [], nations or [], groups or [], fds or [])
+    except Exception:
+        print(f"[contacts-detail] update_org_options FAILED:\n{traceback.format_exc()}", file=sys.stderr, flush=True)
         return []
 
 
@@ -213,8 +275,10 @@ def update_nation_options(states, groups):
     Input("cd-state-selector",  "value"),
     Input("cd-nation-selector", "value"),
     Input("cd-group-selector",  "value"),
+    Input("cd-fd-selector",     "value"),
+    Input("cd-org-selector",    "value"),
 )
-def update_grid(states, nations, groups):
+def update_grid(states, nations, groups, fds, orgs):
     triggered = ctx.triggered_id or "initial"
     print(f"[contacts-detail] update_grid triggered_by={triggered!r}", file=sys.stderr, flush=True)
     try:
@@ -222,7 +286,10 @@ def update_grid(states, nations, groups):
             state_ids=states  or [],
             nation_ids=nations or [],
             group_ids=groups  or [],
+            fd_ids=fds or [],
+            org_ids=orgs or [],
         )
+        df["group"] = df["group"].map(display_group)
         row_data = df.to_dict("records")
         print(f"[contacts-detail] update_grid → {len(row_data)} rows", file=sys.stderr, flush=True)
     except Exception:
@@ -232,6 +299,8 @@ def update_grid(states, nations, groups):
     parts = [
         ", ".join(sorted(states))  if states  else "All states",
         ", ".join(sorted(nations)) if nations else "All nations",
-        ", ".join(sorted(groups))  if groups  else "All groups",
+        ", ".join(sorted(display_group(g) for g in groups)) if groups  else "All groups",
+        ", ".join(sorted(fds))     if fds     else "All FDs",
+        ", ".join(sorted(orgs))    if orgs    else "All orgs",
     ]
     return row_data, " · ".join(parts)
