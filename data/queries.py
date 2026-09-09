@@ -859,7 +859,7 @@ def get_fd_org_roster(
     Columns: fd, org_name, org_label, join_date,
              p2p_texts, phone_calls, face_to_face, total_events,
              p2p_texts_target, phone_calls_target, face_to_face_target, total_events_target,
-             most_recent_event_name, event_modified_at
+             most_recent_event_name, event_modified_at, event_stage
     """
     state_ids  = state_ids  or []
     nation_ids = nation_ids or []
@@ -920,7 +920,7 @@ def get_fd_org_roster(
             GROUP BY org_name
         ),
         recent_event AS (
-            SELECT org_tag, event_name, updated_at
+            SELECT org_tag, event_name, updated_at, TRIM(step) AS step
             FROM {_RECENT_EVENT_TABLE}
             WHERE rn = 1 AND org_tag IS NOT NULL
         )
@@ -938,7 +938,8 @@ def get_fd_org_roster(
             COALESCE(g.face_to_face_target, 0) AS face_to_face_target,
             COALESCE(g.total_events_target, 0) AS total_events_target,
             e.event_name AS most_recent_event_name,
-            e.updated_at AS event_modified_at
+            e.updated_at AS event_modified_at,
+            e.step       AS event_stage
         FROM roster r
         LEFT JOIN metrics m      ON m.org_name = r.org_name
         LEFT JOIN goals g        ON g.org_name = r.org_name

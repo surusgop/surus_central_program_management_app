@@ -234,6 +234,7 @@ FD_ORG_COLUMN_DEFS = [
     _goal_num_col("face_to_face", "# F2F",         minWidth=110),
     _goal_num_col("total_events", "# Events",      minWidth=110),
     {"headerName": "Most Recent Event", "field": "most_recent_event_name", "valueFormatter": _FD_ORG_TEXT, "flex": 2, "minWidth": 220},
+    {"headerName": "Current Stage",     "field": "event_stage",            "valueFormatter": _FD_ORG_TEXT, "flex": 1, "minWidth": 160},
     {"headerName": "Event Modified On", "field": "event_modified_at",   "valueFormatter": _FD_ORG_TEXT, "flex": 1, "minWidth": 140},
 ]
 
