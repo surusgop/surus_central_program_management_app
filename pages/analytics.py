@@ -667,7 +667,7 @@ def update_summary(fd_ids, orgs, states, nations, groups, start_date, end_date):
         g_total_contacts = _goal_span(total_contacts_ytd, goals.get("t_contacts", 0) * count_reg_voters_ytd)
 
         # Total Events / # of Connectors / P2P/Phone/F2F targets all come from
-        # the nation goal calendar (real per-nation targets), scoped to the
+        # the org-level goal calendar (real per-org targets), scoped to the
         # currently selected (snapped) date range rather than a flat
         # KPI-constant multiplier.
         goal_cal_df = get_goal_calendar_targets(

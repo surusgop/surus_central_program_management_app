@@ -16,8 +16,6 @@ Optional:
                                        (default: geo_assets.boundaries.cb_2025_500k)
   DATABRICKS_GOALS_TABLE              Overrides the goal constants table
                                        (default: universal.bitables.clp_goals_source)
-  DATABRICKS_GOAL_CALENDAR_TABLE      Overrides the nation goal calendar table
-                                       (default: universal.bitables.nation_goal_calendar)
   DATABRICKS_FD_SOURCE_TABLE          Overrides the FD -> org roster table
                                        (default: universal.bitables.fd_source)
   DATABRICKS_RECENT_EVENT_TABLE       Overrides the most-recent-event-per-org table
@@ -730,9 +728,6 @@ def get_goal_constants() -> dict[str, int]:
     return _cached("goal_constants", _fetch, ttl=3600)
 
 
-_GOAL_CALENDAR_TABLE = os.environ.get("DATABRICKS_GOAL_CALENDAR_TABLE", "universal.bitables.nation_goal_calendar")
-
-
 def get_goal_calendar_targets(
     state_ids: list[str],
     nation_ids: list[str],
@@ -743,7 +738,16 @@ def get_goal_calendar_targets(
     org_ids: list[str] | None = None,
 ) -> pd.DataFrame:
     """
-    Returns per-nation goal targets for the selected date range.
+    Returns per-org goal targets for the selected date range — one row per
+    (state, group, nation, org_name). Callers sum the rows to get the target
+    for whatever the filters select (one org, a nation, a state, ...).
+
+    The goal calendar's grain is org + week_start: each org accrues its own
+    goals from its own join date and UC count, and a nation's goal is the sum
+    of its orgs'. Org selections are therefore applied directly as an org_name
+    filter, and FD selections are resolved to the exact orgs that FD runs via
+    fd_source (latest snapshot, same roster get_fd_org_roster uses) — rather
+    than widened to the whole nation.
 
     texts/calls/events/f2f are summed from the per-week delta columns — summing
     deltas (rather than diffing the cumulative columns) gives the correct target
@@ -754,56 +758,59 @@ def get_goal_calendar_targets(
     week in the selected range (MAX_BY on week_start) — i.e. "how many connectors
     should exist by now," not "how many were added during this window."
 
-    state/group aren't stored on nation_goal_calendar itself (its grain is just
-    nation + week_start), so they're pulled in via the same nation -> state/group
-    mapping already used by contact_analysis_dash. fd is pulled in the same way
-    and filtered directly (nation_dim comes straight from contact_analysis_dash,
-    the only table that has an fd column).
+    state/group aren't stored on the goal calendar itself, so they're pulled in
+    via the nation -> state/group mapping on contact_analysis_dash. nation_dim
+    is deliberately DISTINCT'd on (state, group, nation) only — adding fd or
+    org_name there would multiply its rows per nation and silently inflate
+    every SUM()-based target below (e.g. a nation with 2 FDs showed double its
+    text/event/call goals).
 
-    org_ids is NOT joined into nation_dim the way fd is — a nation can have many
-    orgs, and nation_dim is DISTINCT'd per (state, group, nation, fd), so adding
-    org_name there would multiply nation_dim's rows per nation and silently
-    inflate every SUM()-based target below. Instead, org_ids is resolved to the
-    nation(s) it implies (via _resolve_nation_ids, same bridge the raw-table
-    queries use) and applied as a plain nation filter.
-
-    Columns: state, group, nation,
+    Columns: state, group, nation, org_name,
              connectors_target, texts_target, calls_target, events_target, f2f_target
     """
     fd_ids            = fd_ids or []
     org_ids           = org_ids or []
-    nation_ids        = _resolve_nation_ids(nation_ids, [], org_ids)
     state_filter      = _in_filter("nd.state",   state_ids)
     nation_filter     = _in_filter("g.nation",   nation_ids)
     group_filter      = _in_filter("nd.`group`", group_ids)
-    fd_filter         = _in_filter("nd.fd",      fd_ids)
+    org_filter        = _in_filter("g.org_name", org_ids)
+    fd_filter         = (
+        f"""AND g.org_name IN (
+              SELECT org_name FROM {_FD_SOURCE_TABLE}
+              WHERE date_recorded = (SELECT MAX(date_recorded) FROM {_FD_SOURCE_TABLE})
+              {_in_filter("fd", fd_ids)}
+          )"""
+        if fd_ids else ""
+    )
     date_start_filter = f"AND CAST(g.week_start AS DATE) >= '{start_date[:10]}'" if start_date else ""
     date_end_filter   = f"AND CAST(g.week_start AS DATE) <= '{end_date[:10]}'"   if end_date   else ""
 
     sql_str = f"""
         WITH nation_dim AS (
-            SELECT DISTINCT state, `group`, nation, fd
+            SELECT DISTINCT state, `group`, nation
             FROM {_TABLE}
         )
         SELECT
             nd.state,
             nd.`group`,
             g.nation,
+            g.org_name,
             MAX_BY(g.connectors_target, g.week_start) AS connectors_target,
             SUM(g.texts_delta)      AS texts_target,
             SUM(g.calls_delta)      AS calls_target,
             SUM(g.events_delta)     AS events_target,
             SUM(g.f2f_delta)        AS f2f_target
-        FROM {_GOAL_CALENDAR_TABLE} g
+        FROM {_GOAL_CALENDAR_ORG_TABLE} g
         JOIN nation_dim nd ON nd.nation = g.nation
         WHERE 1=1
           {state_filter}
           {nation_filter}
           {group_filter}
+          {org_filter}
           {fd_filter}
           {date_start_filter}
           {date_end_filter}
-        GROUP BY nd.state, nd.`group`, g.nation
+        GROUP BY nd.state, nd.`group`, g.nation, g.org_name
     """
 
     key = (
@@ -840,16 +847,14 @@ def get_fd_org_roster(
     isn't filtered by state/nation/group/fd/org directly -- it's joined to the
     roster by org_name, which already carries that scoping.
 
-    Unlike get_goal_calendar_targets (nation-level), texts/calls/events/f2f
-    targets here are NOT summed from the per-week delta columns -- spot-checking
-    against the org-level goal sheet showed those deltas don't reliably
-    reconcile with the actual *_target trajectory (a target can jump between
-    two weeks by more than that week's recorded delta), so summing them
-    under-counts. Instead, each target is read directly via MAX_BY(*_target,
-    week_start) -- its value as of the last week in the selected range, the
-    same point-in-time treatment get_goal_calendar_targets already uses for
-    connectors_target. Same caveat applies: a range spanning a January reset
-    boundary will reflect only the post-reset target, not the full prior year.
+    Unlike get_goal_calendar_targets, texts/calls/events/f2f targets here are
+    NOT summed from the per-week delta columns -- each target is read directly
+    via MAX_BY(*_target, week_start), its cumulative year-to-date value as of
+    the last week in the selected range. For a range starting Jan 1 that
+    equals the summed deltas (the two reconcile exactly in
+    nation_goal_calendar_org); for a range starting mid-year it still reports
+    the full YTD target rather than just the window's share, and a range
+    spanning a January reset reflects only the post-reset target.
 
     An org can appear with 0 metrics/targets / a blank Most Recent Event if
     it's on the FD roster but hasn't landed in contact_analysis_dash_org,
