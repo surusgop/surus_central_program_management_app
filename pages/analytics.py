@@ -137,12 +137,15 @@ def _progress_row(label: str, actual: int, target: int):
 
 
 def _latest_snapshot_sum(df, cols: list[str]) -> dict[str, int]:
-    """Sum point-in-time snapshot columns using each (state, group, nation)'s own
-    latest week, not a single global-latest week — a global cutoff drops any group
-    whose latest row falls on an earlier date and silently zeroes it out."""
+    """Sum point-in-time snapshot columns using each (state, group, nation, org)'s
+    own latest week, not a single global-latest week — a global cutoff drops any
+    group whose latest row falls on an earlier date and silently zeroes it out.
+    Org must be part of the grouping key: a nation can contain several orgs, each
+    with its own count_reg_voters/count_unreliable_conservatives snapshot, so
+    grouping without org_name collapses them and keeps only one org's row."""
     if df.empty:
         return {c: 0 for c in cols}
-    latest = df.sort_values("week_start").groupby(["state", "group", "nation"])[cols].last()
+    latest = df.sort_values("week_start").groupby(["state", "group", "nation", "org_name"])[cols].last()
     return {c: int(latest[c].sum()) for c in cols}
 
 

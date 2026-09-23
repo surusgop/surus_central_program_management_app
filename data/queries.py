@@ -317,7 +317,7 @@ def get_contact_summary(
     Returns rows from the pre-aggregated contact analysis table filtered by the
     provided state, nation, group, FD, and org values. Empty lists mean no filter.
 
-    Columns: state, group, nation, fd, week_start, total_contacts, unique_contacts,
+    Columns: state, group, nation, fd, org_name, week_start, total_contacts, unique_contacts,
              contact_door_knock, contact_email, contact_phone, contact_text,
              contact_snail_mail, contact_face_to_face, contact_other, total_events,
              contacted_1_time, contacted_2_times, contacted_3_times, contacted_4plus_times
@@ -336,6 +336,7 @@ def get_contact_summary(
             `group`,
             nation,
             fd,
+            org_name,
             week_start,
             total_contacts,
             unique_contacts,
