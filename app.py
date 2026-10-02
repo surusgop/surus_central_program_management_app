@@ -1,4 +1,4 @@
-﻿import os
+import os
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -6,7 +6,8 @@ load_dotenv(Path(__file__).parent / ".env")
 
 import dash
 import dash_bootstrap_components as dbc
-from auth import register_auth
+from dash import dcc
+from surus_auth.flask import register_auth, get_current_user
 
 app = dash.Dash(
     __name__,
@@ -20,18 +21,24 @@ app = dash.Dash(
     title="Central Program Management",
 )
 server = app.server  # expose Flask server for gunicorn
-register_auth(server)
+register_auth(server, dash=True)
 
-from components.navbar import navbar  # noqa: E402 — needs app defined first
+from components.navbar import create_navbar  # noqa: E402 — needs app defined first
 
-app.layout = dbc.Container(
-    [
-        navbar,
-        dash.page_container,
-    ],
-    fluid=True,
-    className="px-0",
-)
+
+def serve_layout():
+    return dbc.Container(
+        [
+            dcc.Location(id="url", refresh=False),
+            create_navbar(get_current_user()),  # passes full user dict
+            dash.page_container,
+        ],
+        fluid=True,
+        className="px-0",
+    )
+
+
+app.layout = serve_layout
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8050))

@@ -10,9 +10,9 @@ The Surus Central Program Management is a voter contact analytics platform that 
 
 ### Signing In
 
-The dashboard uses Google OAuth for authentication. When you first visit the URL, you will be redirected to a Google sign-in page. Sign in with your authorized `@surusenterprises.com` Google account. After a successful login, you are redirected to the dashboard and a session cookie keeps you logged in.
+The dashboard uses Google OAuth for authentication. When you first visit the URL, you will be redirected to a Google sign-in page. Sign in with your authorized `@surusenterprises.com` Google account. After a successful login, you are redirected to the page you originally requested and a session cookie keeps you logged in (up to 30 days).
 
-If your session expires, you will be redirected to sign in again automatically.
+Your name and a **Sign out** link appear in the top navigation bar. If your session expires, you will be redirected to sign in again automatically.
 
 ---
 
