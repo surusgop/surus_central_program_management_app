@@ -154,6 +154,12 @@ label { color: var(--il-navy); font-weight: 700; }
   font-family: var(--il-font);
 }
 
+/* Goal-status cell fills (Analytics 2 FD/Org table) */
+.ag-theme-alpine .ag-cell.goal-fill-on,    .goal-swatch.goal-fill-on    { background-color: #d1e7dd; color: #0f5132; }
+.ag-theme-alpine .ag-cell.goal-fill-above, .goal-swatch.goal-fill-above { background-color: #198754; color: #fff; font-weight: 600; }
+.ag-theme-alpine .ag-cell.goal-fill-below, .goal-swatch.goal-fill-below { background-color: #fff3cd; color: #664d03; }
+.goal-swatch { display: inline-block; padding: 0 .4rem; border-radius: 3px; }
+
 /* ── Plotly charts ────────────────────────────────────────────────────────── */
 .js-plotly-plot .plotly,
 .js-plotly-plot .plotly div { border-radius: var(--il-radius); }

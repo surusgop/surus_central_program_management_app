@@ -821,6 +821,100 @@ def get_goal_calendar_targets(
     return _cached(key, lambda: run_query(sql_str, label="goal_calendar_targets"))
 
 
+def get_goal_calendar_targets_v2(
+    state_ids: list[str],
+    nation_ids: list[str],
+    group_ids: list[str],
+    start_date: str | None,
+    end_date: str | None,
+    fd_ids: list[str] | None = None,
+    org_ids: list[str] | None = None,
+) -> pd.DataFrame:
+    """
+    Analytics 2 variant of get_goal_calendar_targets -- same filters, grain and
+    nation_dim join, but texts/calls/events/f2f targets are pro-rated by week:
+    each month's goal lump is spread evenly over the weeks of its month (a
+    week belongs to the month its week_start Monday falls in) before the date
+    filter is applied. Whole months and YTD come out unchanged; an
+    in-progress month gets its share for the weeks selected. Values come back
+    fractional -- round after summing across orgs, not per row.
+
+    The spread is computed before the date filter so a partial month still
+    sees every week of its month when working out the per-week share.
+
+    connectors_target is likewise the period's share of connectors_delta
+    (growth in the lifetime connector goal), i.e. connectors expected to be
+    *added* in the period, rather than the lifetime figure as of its end.
+
+    Columns: state, group, nation, org_name,
+             connectors_target, texts_target, calls_target, events_target, f2f_target
+    """
+    fd_ids            = fd_ids or []
+    org_ids           = org_ids or []
+    state_filter      = _in_filter("nd.state",   state_ids)
+    nation_filter     = _in_filter("g.nation",   nation_ids)
+    group_filter      = _in_filter("nd.`group`", group_ids)
+    org_filter        = _in_filter("g.org_name", org_ids)
+    fd_filter         = (
+        f"""AND g.org_name IN (
+              SELECT org_name FROM {_FD_SOURCE_TABLE}
+              WHERE date_recorded = (SELECT MAX(date_recorded) FROM {_FD_SOURCE_TABLE})
+              {_in_filter("fd", fd_ids)}
+          )"""
+        if fd_ids else ""
+    )
+    date_start_filter = f"AND CAST(g.week_start AS DATE) >= '{start_date[:10]}'" if start_date else ""
+    date_end_filter   = f"AND CAST(g.week_start AS DATE) <= '{end_date[:10]}'"   if end_date   else ""
+
+    sql_str = f"""
+        WITH nation_dim AS (
+            SELECT DISTINCT state, `group`, nation
+            FROM {_TABLE}
+        ),
+        spread AS (
+            SELECT
+                g.nation,
+                g.org_name,
+                g.week_start,
+                SUM(g.connectors_delta) OVER org_month / COUNT(*) OVER org_month AS connectors_share,
+                SUM(g.texts_delta)  OVER org_month / COUNT(*) OVER org_month AS texts_share,
+                SUM(g.calls_delta)  OVER org_month / COUNT(*) OVER org_month AS calls_share,
+                SUM(g.events_delta) OVER org_month / COUNT(*) OVER org_month AS events_share,
+                SUM(g.f2f_delta)    OVER org_month / COUNT(*) OVER org_month AS f2f_share
+            FROM {_GOAL_CALENDAR_ORG_TABLE} g
+            WHERE 1=1
+              {nation_filter}
+              {org_filter}
+              {fd_filter}
+            WINDOW org_month AS (PARTITION BY g.org_name, YEAR(g.week_start), MONTH(g.week_start))
+        )
+        SELECT
+            nd.state,
+            nd.`group`,
+            g.nation,
+            g.org_name,
+            SUM(g.connectors_share) AS connectors_target,
+            SUM(g.texts_share)  AS texts_target,
+            SUM(g.calls_share)  AS calls_target,
+            SUM(g.events_share) AS events_target,
+            SUM(g.f2f_share)    AS f2f_target
+        FROM spread g
+        JOIN nation_dim nd ON nd.nation = g.nation
+        WHERE 1=1
+          {state_filter}
+          {group_filter}
+          {date_start_filter}
+          {date_end_filter}
+        GROUP BY nd.state, nd.`group`, g.nation, g.org_name
+    """
+
+    key = (
+        f"goal_calendar_targets_v2|{_list_key(state_ids)}|{_list_key(nation_ids)}"
+        f"|{_list_key(group_ids)}|{start_date or ''}|{end_date or ''}|{_list_key(fd_ids)}|{_list_key(org_ids)}"
+    )
+    return _cached(key, lambda: run_query(sql_str, label="goal_calendar_targets_v2"))
+
+
 # ── FD / Org roster (Field Director -> Organization rollup) ──────────────────
 
 def get_fd_org_roster(
@@ -958,6 +1052,162 @@ def get_fd_org_roster(
         f"|{_list_key(fd_ids)}|{_list_key(org_ids)}|{start_date or ''}|{end_date or ''}"
     )
     return _cached(key, lambda: run_query(sql_str, label="fd_org_roster"))
+
+
+def get_fd_org_roster_v2(
+    state_ids: list[str] | None = None,
+    nation_ids: list[str] | None = None,
+    group_ids: list[str] | None = None,
+    fd_ids: list[str] | None = None,
+    org_ids: list[str] | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> pd.DataFrame:
+    """
+    Analytics 2 variant of get_fd_org_roster -- kept separate so the original
+    Overview page's query stays untouched while this one is revised. Same
+    roster/metrics logic (no recent-event join -- Analytics 2 dropped those
+    columns), with these differences:
+
+      - texts/calls/f2f/events/connectors targets cover only the selected
+        weeks, not the full YTD (or lifetime) figure. The goal calendar posts
+        each month's goal as a lump on that month's first week, so each lump
+        is first spread evenly over the weeks of its month (a week belongs to
+        the month its week_start Monday falls in), then summed over
+        start_date..end_date. Whole months come out exactly equal to their
+        goal; an in-progress month gets its pro-rated share for the weeks
+        that are complete. Callers pass program-month bounds from
+        utils.dates.resolve_month_period.
+
+      - total_contacts: summed from contact_analysis_dash over the date range
+        (no per-org goal exists for it).
+      - connectors: connector_count (new connectors per week, NULL on most
+        rows) summed over the period -- connectors *added* in the period,
+        matching connectors_target, which is the period's share of the goal
+        calendar's connectors_delta (its week-over-week growth in the
+        lifetime connector goal; the deltas sum exactly to connectors_target).
+        Known lag: the goal calendar raises the connector goal the week
+        *after* a connector lands in connector_count.
+
+    Columns: fd, org_name, org_label, join_date,
+             p2p_texts, phone_calls, face_to_face, total_events, total_contacts, connectors,
+             p2p_texts_target, phone_calls_target, face_to_face_target, total_events_target,
+             connectors_target
+    """
+    state_ids  = state_ids  or []
+    nation_ids = nation_ids or []
+    group_ids  = group_ids  or []
+    fd_ids     = fd_ids     or []
+    org_ids    = org_ids    or []
+
+    roster_org_ids = _resolve_org_ids(state_ids, nation_ids, group_ids, org_ids)
+
+    fd_filter         = _in_filter("fd",       fd_ids)
+    roster_org_filter = _in_filter("org_name", roster_org_ids)
+
+    metrics_state_filter  = _in_filter("state",    state_ids)
+    metrics_nation_filter = _in_filter("nation",   nation_ids)
+    metrics_group_filter  = _in_filter("`group`",  group_ids)
+    metrics_fd_filter     = _in_filter("fd",       fd_ids)
+    metrics_org_filter    = _in_filter("org_name", org_ids)
+    date_start_filter     = f"AND CAST(week_start AS DATE) >= '{start_date[:10]}'" if start_date else ""
+    date_end_filter       = f"AND CAST(week_start AS DATE) <= '{end_date[:10]}'"   if end_date   else ""
+    # The goal spread is computed over whole org-months before any date bound
+    # (so a partial month still divides by all of its weeks); the period's
+    # start is applied to the summed shares here, its end in the goals CTE.
+    goal_in_range        = f"CAST(week_start AS DATE) >= '{start_date[:10]}'" if start_date else "TRUE"
+
+    sql_str = f"""
+        WITH roster AS (
+            SELECT fd, org_name, clp_orgs AS org_label, join_date
+            FROM {_FD_SOURCE_TABLE}
+            WHERE date_recorded = (SELECT MAX(date_recorded) FROM {_FD_SOURCE_TABLE})
+            {fd_filter}
+            {roster_org_filter}
+        ),
+        metrics AS (
+            SELECT
+                org_name,
+                SUM(contact_text)         AS p2p_texts,
+                SUM(contact_phone)        AS phone_calls,
+                SUM(contact_face_to_face) AS face_to_face,
+                SUM(total_events)         AS total_events,
+                SUM(total_contacts)       AS total_contacts
+            FROM {_TABLE}
+            WHERE org_name IS NOT NULL
+              {metrics_state_filter}
+              {metrics_nation_filter}
+              {metrics_group_filter}
+              {metrics_fd_filter}
+              {metrics_org_filter}
+              {date_start_filter}
+              {date_end_filter}
+            GROUP BY org_name
+        ),
+        connectors AS (
+            SELECT
+                org_name,
+                CAST(SUM(connector_count) AS BIGINT) AS connectors
+            FROM {_TABLE}
+            WHERE org_name IS NOT NULL
+              {date_start_filter}
+              {date_end_filter}
+            GROUP BY org_name
+        ),
+        goal_spread AS (
+            SELECT
+                org_name,
+                week_start,
+                SUM(connectors_delta) OVER org_month / COUNT(*) OVER org_month AS connectors_share,
+                SUM(texts_delta)  OVER org_month / COUNT(*) OVER org_month AS texts_share,
+                SUM(calls_delta)  OVER org_month / COUNT(*) OVER org_month AS calls_share,
+                SUM(f2f_delta)    OVER org_month / COUNT(*) OVER org_month AS f2f_share,
+                SUM(events_delta) OVER org_month / COUNT(*) OVER org_month AS events_share
+            FROM {_GOAL_CALENDAR_ORG_TABLE}
+            WHERE org_name IS NOT NULL
+            WINDOW org_month AS (PARTITION BY org_name, YEAR(week_start), MONTH(week_start))
+        ),
+        goals AS (
+            SELECT
+                org_name,
+                CAST(ROUND(SUM(CASE WHEN {goal_in_range} THEN texts_share  ELSE 0 END)) AS BIGINT) AS p2p_texts_target,
+                CAST(ROUND(SUM(CASE WHEN {goal_in_range} THEN calls_share  ELSE 0 END)) AS BIGINT) AS phone_calls_target,
+                CAST(ROUND(SUM(CASE WHEN {goal_in_range} THEN f2f_share    ELSE 0 END)) AS BIGINT) AS face_to_face_target,
+                CAST(ROUND(SUM(CASE WHEN {goal_in_range} THEN events_share ELSE 0 END)) AS BIGINT) AS total_events_target,
+                CAST(ROUND(SUM(CASE WHEN {goal_in_range} THEN connectors_share ELSE 0 END)) AS BIGINT) AS connectors_target
+            FROM goal_spread
+            WHERE 1=1
+              {date_end_filter}
+            GROUP BY org_name
+        )
+        SELECT
+            r.fd,
+            r.org_name,
+            r.org_label,
+            r.join_date,
+            COALESCE(m.p2p_texts, 0)      AS p2p_texts,
+            COALESCE(m.phone_calls, 0)    AS phone_calls,
+            COALESCE(m.face_to_face, 0)   AS face_to_face,
+            COALESCE(m.total_events, 0)   AS total_events,
+            COALESCE(m.total_contacts, 0) AS total_contacts,
+            COALESCE(c.connectors, 0)     AS connectors,
+            COALESCE(g.p2p_texts_target, 0)    AS p2p_texts_target,
+            COALESCE(g.phone_calls_target, 0)  AS phone_calls_target,
+            COALESCE(g.face_to_face_target, 0) AS face_to_face_target,
+            COALESCE(g.total_events_target, 0) AS total_events_target,
+            COALESCE(g.connectors_target, 0)   AS connectors_target
+        FROM roster r
+        LEFT JOIN metrics m    ON m.org_name = r.org_name
+        LEFT JOIN connectors c ON c.org_name = r.org_name
+        LEFT JOIN goals g      ON g.org_name = r.org_name
+        ORDER BY r.fd, r.org_label
+    """
+
+    key = (
+        f"fd_org_roster_v2|{_list_key(state_ids)}|{_list_key(nation_ids)}|{_list_key(group_ids)}"
+        f"|{_list_key(fd_ids)}|{_list_key(org_ids)}|{start_date or ''}|{end_date or ''}"
+    )
+    return _cached(key, lambda: run_query(sql_str, label="fd_org_roster_v2"))
 
 
 # ── Boundaries ────────────────────────────────────────────────────────────────

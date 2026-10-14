@@ -12,6 +12,7 @@ finished yet, so the boundary falls back one additional week.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date, timedelta
 
 
@@ -123,3 +124,154 @@ def period_to_date_ready(anchor_start: str | date, today: date | None = None) ->
     cutoff = last_complete_week_end(today)
     first_monday = anchor + timedelta(days=(7 - anchor.weekday()) % 7)
     return cutoff >= first_monday + timedelta(days=6)
+
+
+# -- Program months ------------------------------------------------------------
+#
+# Goals are benchmarked monthly but data lands weekly. A "program month" is
+# the set of Mon-Sun weeks whose week_start Monday falls in that calendar
+# month (so 4 or 5 weeks) -- the same rule nation_goal_calendar_org uses when
+# it posts each month's goal lump, and the same key contact_analysis_dash_org
+# is bucketed on. Filtering week_start to a month's calendar bounds therefore
+# lines actuals and goals up on exactly the same weeks.
+
+
+def mondays_in_month(year: int, month: int) -> list[date]:
+    """The week_start Mondays belonging to a program month."""
+    d = date(year, month, 1)
+    d += timedelta(days=(7 - d.weekday()) % 7)
+    weeks = []
+    while d.month == month:
+        weeks.append(d)
+        d += timedelta(days=7)
+    return weeks
+
+
+def parse_ym(value: str) -> tuple[int, int]:
+    """'2026-09' -> (2026, 9)."""
+    y, m = str(value)[:7].split("-")
+    return int(y), int(m)
+
+
+def month_span(from_ym: str, to_ym: str) -> list[tuple[int, int]]:
+    """Every (year, month) from from_ym through to_ym inclusive (swapped if reversed)."""
+    a, b = sorted([parse_ym(from_ym), parse_ym(to_ym)])
+    months = []
+    y, m = a
+    while (y, m) <= b:
+        months.append((y, m))
+        y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+    return months
+
+
+def _shift_months(ym: tuple[int, int], n: int) -> tuple[int, int]:
+    idx = ym[0] * 12 + (ym[1] - 1) - n
+    return idx // 12, idx % 12 + 1
+
+
+def _ym_label(ym: tuple[int, int]) -> str:
+    return date(ym[0], ym[1], 1).strftime("%b %Y")
+
+
+@dataclass(frozen=True)
+class MonthPeriod:
+    """
+    A run of program months clamped to fully-complete weeks.
+
+    start/end bound week_start the same way the free-form helpers above do
+    (start is a Monday, end is the Sunday closing the last complete week), so
+    they drop straight into the existing `week_start >= start` /
+    `week_start <= end` filters.
+    """
+    months: tuple[tuple[int, int], ...]
+    start: str
+    end: str
+    last_month_weeks_complete: int
+    last_month_weeks_total: int
+
+    @property
+    def partial(self) -> bool:
+        """True when the last month in the period is still in progress."""
+        return self.last_month_weeks_complete < self.last_month_weeks_total
+
+    @property
+    def label(self) -> str:
+        if len(self.months) == 1:
+            return _ym_label(self.months[0])
+        return f"{_ym_label(self.months[0])} - {_ym_label(self.months[-1])}"
+
+    @property
+    def pace_note(self) -> str:
+        """e.g. 'Oct 2026: 1 of 4 weeks complete', or '' for a closed period."""
+        if not self.partial:
+            return ""
+        return (
+            f"{_ym_label(self.months[-1])}: {self.last_month_weeks_complete} of "
+            f"{self.last_month_weeks_total} weeks complete"
+        )
+
+
+def _period_bounds(months: list[tuple[int, int]], last_month_weeks: int | None) -> tuple[str, str] | None:
+    """week_start bounds over `months`, keeping only the first `last_month_weeks`
+    weeks of the final month (None = all of them)."""
+    weeks = [w for ym in months[:-1] for w in mondays_in_month(*ym)]
+    last = mondays_in_month(*months[-1])
+    weeks += last if last_month_weeks is None else last[:last_month_weeks]
+    if not weeks:
+        return None
+    return str(weeks[0]), str(weeks[-1] + timedelta(days=6))
+
+
+def resolve_month_period(from_ym: str, to_ym: str, today: date | None = None) -> MonthPeriod | None:
+    """
+    Resolve a From/To month selection to its complete weeks. Weeks that haven't
+    fully landed yet are dropped, so an in-progress final month contributes
+    only its complete weeks (callers pro-rate that month's goal to match).
+
+    Returns None when no week in the selection is complete yet, so callers can
+    render the same "Data Pending" state as resolve_complete_week_range().
+    """
+    cutoff = last_complete_week_end(today)
+    months = month_span(from_ym, to_ym)
+    complete = [w for ym in months for w in mondays_in_month(*ym) if w + timedelta(days=6) <= cutoff]
+    if not complete:
+        return None
+    last = mondays_in_month(*months[-1])
+    return MonthPeriod(
+        months=tuple(months),
+        start=str(complete[0]),
+        end=str(complete[-1] + timedelta(days=6)),
+        last_month_weeks_complete=sum(1 for w in last if w + timedelta(days=6) <= cutoff),
+        last_month_weeks_total=len(last),
+    )
+
+
+def prior_month_period(period: MonthPeriod) -> tuple[str, str, str] | None:
+    """
+    (start, end, label) of the comparison period for `period`:
+
+      - a multi-month run starting in January (year to date) -> the same
+        months a year earlier ("vs same period 2025")
+      - anything else -> the same number of months immediately before it
+
+    If `period`'s last month is still in progress, the comparison's last month
+    is cut to the same number of weeks, so a partial month is never compared
+    against a whole one.
+    """
+    months = list(period.months)
+    n = len(months)
+    if n > 1 and months[0][1] == 1:
+        prior = [(y - 1, m) for y, m in months]
+        label = f"vs same period {prior[0][0]}"
+    else:
+        prior = [_shift_months(ym, n) for ym in months]
+        label = f"vs {_ym_label(prior[0])}" if n == 1 else f"vs prior {n} months"
+
+    keep = period.last_month_weeks_complete if period.partial else None
+    if keep is not None and n == 1:
+        label += f", first {keep} wk{'s' if keep != 1 else ''}"
+
+    bounds = _period_bounds(prior, keep)
+    if bounds is None:
+        return None
+    return bounds[0], bounds[1], label

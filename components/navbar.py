@@ -6,6 +6,7 @@ def create_navbar(user: dict | None = None):
     # on every data page (Dash's client-side router would otherwise bypass it).
     nav_links = [
         dbc.NavItem(dbc.NavLink("Overview", href="/analytics", external_link=True)),
+        dbc.NavItem(dbc.NavLink("Analytics 2", href="/analytics-2", external_link=True)),
     ]
 
     if user:
