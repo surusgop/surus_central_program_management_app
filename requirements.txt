@@ -7,7 +7,8 @@ pandas==2.2.2
 pyarrow==16.1.0
 python-dotenv==1.0.1
 gunicorn==22.0.0
-surus-auth[flask] @ git+https://${GH_PAT}@github.com/surusgop/surus-auth@v1.1.1
+# Sign-in, roles, usage tracking and the /admin page (shared universal.ops tables).
+surus-auth[flask,databricks] @ git+https://${GH_PAT}@github.com/surusgop/surus-auth@v2.2.1
 shapely>=2.0.0
 matplotlib>=3.8.0
 reportlab>=4.0.0
