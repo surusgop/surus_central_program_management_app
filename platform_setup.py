@@ -15,9 +15,9 @@ APP_ID = "central_pm"
 TITLE = "Central Program Management"
 ENV = os.environ.get("APP_ENV", "dev").strip().lower()
 # What gets kept until an admin picks a level on /admin (the app's `apps` row):
-# standard = sign-ins, page views, admin actions, errors, plus filters applied
-# and PDF reports downloaded.
-TRACKING_LEVEL = "standard"
+# basic = sign-ins, page views, admin actions, errors. Raise to standard on
+# /admin to also keep the filters applied and PDF reports downloaded.
+TRACKING_LEVEL = "basic"
 
 # The admin page is shared by every Surus app; this makes it look like this one
 # (assets/styles.css): Surus Illinois red header, navy text, Open Sans, 4px corners.

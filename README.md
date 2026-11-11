@@ -16,7 +16,7 @@ See `.env.example` for the full variable list.
 
 ### Roles, usage tracking and `/admin`
 
-surus-auth v2 keeps who-can-do-what and who-did-what in the shared `universal.ops` tables, under `app_id = "central_pm"` (see [platform_setup.py](platform_setup.py)). Tracking level: **standard**.
+surus-auth v2 keeps who-can-do-what and who-did-what in the shared `universal.ops` tables, under `app_id = "central_pm"` (see [platform_setup.py](platform_setup.py)). Tracking level: starts at **basic** (sign-ins, page views, admin actions, errors); raise it to **standard** on `/admin` for the events below.
 
 - **Logged:** sign-ins (`login`), each page opened (`page.view`: `home`, `analytics`, `analytics-2`, `contacts`), each filter change on Overview and Analytics 2 (`analytics.filter`, a `query` event with how many values are picked per filter and which control changed, never the names of states, nations, field directors or orgs) and each PDF downloaded (`report.export`, an `export` event; a failed one is logged as an `error`). Kept or dropped by the tracking level set on `/admin` (basic keeps sign-ins and page views only).
 - **`/admin`:** admins see people and roles, the activity feed and the tracking level. The navbar shows an **Admin** link to admins. The page comes from surus-auth and is themed to match this app (`ADMIN_THEME` in [platform_setup.py](platform_setup.py)). Turning someone off there blocks their pages and the data callbacks (`app.py` guards Dash's callback endpoint, which surus-auth leaves public in Dash mode).
