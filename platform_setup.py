@@ -11,7 +11,9 @@ import re
 from surus_auth.flask import get_current_user
 from surus_auth.platform import from_env, memory_kit
 
-APP_ID = "central_pm"
+# This app's key in universal.ops.apps. Set APP_ID to override (it must match
+# the app's row there); every role and event is stored under it.
+APP_ID = os.environ.get("APP_ID", "").strip() or "central_pm"
 TITLE = "Central Program Management"
 ENV = os.environ.get("APP_ENV", "dev").strip().lower()
 # What gets kept until an admin picks a level on /admin (the app's `apps` row):
