@@ -37,6 +37,7 @@ from data.queries import (
     get_raw_contact_counts,
     get_state_list,
 )
+from platform_setup import filter_counts, track, track_filter
 from reports.pdf_report import build_report
 from utils.dates import (
     last_complete_week_end,
@@ -72,6 +73,11 @@ CONTACT_FREQUENCY = [
 ]
 
 CHART_COLORS = ["#C1272D", "#2A313C", "#75859E", "#E8A020", "#5B8FA8", "#8B4A6E", "#6B7A8D"]
+
+
+def _filter_set(fd_ids, orgs, states, nations, groups) -> dict:
+    """The page's filters by name, for usage logging (only counts are logged)."""
+    return {"field_director": fd_ids, "org": orgs, "state": states, "nation": nations, "group": groups}
 
 
 class _DataPending(Exception):
@@ -624,6 +630,9 @@ def update_summary(fd_ids, orgs, states, nations, groups, month_from, month_to):
         f"from={month_from!r} to={month_to!r}",
         file=sys.stderr, flush=True,
     )
+    if ctx.triggered_id:  # a filter the user changed, not the page's first render
+        track_filter("analytics-2", _filter_set(fd_ids, orgs, states, nations, groups) | {
+            "month_range": month_from or month_to}, changed=ctx.triggered_id)
 
     fd_ids  = fd_ids  or []
     orgs    = orgs    or []
@@ -897,11 +906,17 @@ def update_fd_org_rollup(fd_ids, orgs, states, nations, groups, month_from, mont
 )
 def download_report(_, fd_ids, orgs, states, nations, groups):
     print("[analytics2] download_report fired", file=sys.stderr, flush=True)
+    filters = filter_counts(_filter_set(fd_ids, orgs, states, nations, groups))
     try:
-        return _generate_report(states, nations, groups, fd_ids, orgs)
-    except Exception:
+        report = _generate_report(states, nations, groups, fd_ids, orgs)
+    except Exception as exc:
         print(f"[analytics2] download_report FAILED:\n{traceback.format_exc()}", file=sys.stderr, flush=True)
+        track("report.export", event_type="error", page="analytics-2", outcome="error", target_type="report",
+              target="contact_report_pdf", metadata={"filters": filters, "error": type(exc).__name__})
         return None
+    track("report.export", event_type="export", page="analytics-2", target_type="report",
+          target="contact_report_pdf", metadata={"filters": filters, "format": "pdf"})
+    return report
 
 
 def _generate_report(states, nations, groups, fd_ids, orgs):

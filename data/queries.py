@@ -3,10 +3,16 @@ Dashboard data layer — uses Databricks SQL Connector against a SQL Warehouse.
 
 Required env vars:
   DATABRICKS_HOST          Workspace URL  e.g. https://adb-xxx.azuredatabricks.net
-  DATABRICKS_TOKEN         Personal access token
   DATABRICKS_SQL_HTTP_PATH SQL Warehouse HTTP path  e.g. /sql/1.0/warehouses/<id>
+  and one of:
+  DATABRICKS_CLIENT_ID +   The app's service principal (OAuth secret): access
+  DATABRICKS_CLIENT_SECRET tokens are fetched and renewed automatically
+  DATABRICKS_TOKEN         A personal access token. Wins when both are set (the
+                           same rule as surus-auth, so the data and the usage
+                           tracking always run as the same identity)
 
 Optional:
+  DATABRICKS_OAUTH_SCOPE              Scope of the OAuth secret (default: all-apis)
   QUERY_CACHE_SECONDS                 How long to cache query results (default: 300)
   DATABRICKS_CONTACT_ANALYSIS_TABLE   Overrides the pre-aggregated contact analysis table
                                        (default: universal.bitables.contact_analysis_dash)
@@ -41,17 +47,35 @@ load_dotenv()
 
 # ── Connection ────────────────────────────────────────────────────────────────
 
-_HOST = os.environ.get("DATABRICKS_HOST", "").replace("https://", "").rstrip("/")
-_TOKEN = os.environ.get("DATABRICKS_TOKEN", "")
-_HTTP_PATH = os.environ.get("DATABRICKS_SQL_HTTP_PATH", "")
+_HOST = os.environ.get("DATABRICKS_HOST", "").strip().replace("https://", "").rstrip("/")
+_HTTP_PATH = os.environ.get("DATABRICKS_SQL_HTTP_PATH", "").strip()
 _CACHE_TTL = int(os.environ.get("QUERY_CACHE_SECONDS", 300))
 
 
+def _token_source():
+    """A function giving a current access token: the PAT if set, else the
+    service principal's OAuth token (fetched, kept, renewed before expiry)."""
+    token = os.environ.get("DATABRICKS_TOKEN", "").strip()
+    if token:
+        return lambda: token
+    client_id = os.environ.get("DATABRICKS_CLIENT_ID", "").strip()
+    client_secret = os.environ.get("DATABRICKS_CLIENT_SECRET", "").strip()
+    if client_id and client_secret:
+        from surus_auth.platform import oauth_token_source
+        scope = os.environ.get("DATABRICKS_OAUTH_SCOPE", "").strip() or "all-apis"
+        return oauth_token_source(_HOST, client_id, client_secret, scope=scope)
+    return lambda: ""  # nothing set: the connect fails with the connector's own error
+
+
+_get_token = _token_source()
+
+
 def _connect() -> sql.client.Connection:
+    # A new connection per query, so each one gets a current token.
     return sql.connect(
         server_hostname=_HOST,
         http_path=_HTTP_PATH,
-        access_token=_TOKEN,
+        access_token=_get_token(),
     )
 
 

@@ -13,6 +13,9 @@ def create_navbar(user: dict | None = None):
         full_name = " ".join(p for p in [user.get("first_name"), user.get("last_name")] if p)
         display_name = full_name or user.get("email", "")
         nav_links.append(dbc.NavItem(dbc.NavLink(display_name, href="#", disabled=True)))
+        if user.get("role") == "admin":
+            # /admin is a Flask page (surus-auth), not a Dash page: full page load.
+            nav_links.append(dbc.NavItem(dbc.NavLink("Admin", href="/admin", external_link=True)))
         nav_links.append(dbc.NavItem(dbc.NavLink("Sign out", href="/auth/logout", external_link=True)))
 
     return dbc.NavbarSimple(
